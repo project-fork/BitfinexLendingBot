@@ -19,6 +19,7 @@ func TestConfig_Validate(t *testing.T) {
 				Currency:                 "USD",
 				MinLoan:                  150.0,
 				MaxLoan:                  1000.0,
+				LoanDays:                 30,
 				MinDailyLendRate:         0.02,
 				SpreadLend:               30,
 				GapBottom:                10,
@@ -40,6 +41,7 @@ func TestConfig_Validate(t *testing.T) {
 				Currency:                 "USD",
 				MinLoan:                  150.0,
 				MaxLoan:                  1000.0,
+				LoanDays:                 0,
 				MinDailyLendRate:         "FRR",
 				SpreadLend:               30,
 				GapBottom:                10,
@@ -148,6 +150,38 @@ func TestConfig_Validate(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "invalid loan days one day",
+			config: Config{
+				BitfinexApiKey:      "test_api_key",
+				BitfinexSecretKey:   "test_secret_key",
+				Currency:            "USD",
+				MinLoan:             150.0,
+				LoanDays:            1,
+				MinDailyLendRate:    0.02,
+				SpreadLend:          30,
+				GapBottom:           10,
+				GapTop:              5000,
+				LendingCheckMinutes: 10,
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid loan days above max",
+			config: Config{
+				BitfinexApiKey:      "test_api_key",
+				BitfinexSecretKey:   "test_secret_key",
+				Currency:            "USD",
+				MinLoan:             150.0,
+				LoanDays:            121,
+				MinDailyLendRate:    0.02,
+				SpreadLend:          30,
+				GapBottom:           10,
+				GapTop:              5000,
+				LendingCheckMinutes: 10,
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -167,6 +201,7 @@ BITFINEX_API_KEY: "test_api_key"
 BITFINEX_SECRET_KEY: "test_secret_key"
 CURRENCY: "USD"
 MIN_LOAN: 150.0
+LOAN_DAYS: 30
 MIN_DAILY_LEND_RATE: 0.02
 SPREAD_LEND: 30
 GAP_BOTTOM: 10
@@ -201,6 +236,9 @@ LENDING_CHECK_MINUTES: 10
 	}
 	if config.MinLoan != 150.0 {
 		t.Errorf("Expected MinLoan to be 150.0, got %f", config.MinLoan)
+	}
+	if config.LoanDays != 30 {
+		t.Errorf("Expected LoanDays to be 30, got %d", config.LoanDays)
 	}
 }
 
@@ -265,5 +303,35 @@ func TestGetMinDailyRateDecimal_FRR(t *testing.T) {
 	}
 	if !config.IsMinDailyLendRateFRR() {
 		t.Errorf("Expected IsMinDailyLendRateFRR() to be true")
+	}
+}
+
+func TestGetLoanPeriod(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   Config
+		fallback int
+		expected int
+	}{
+		{
+			name:     "uses configured fixed loan days",
+			config:   Config{LoanDays: 30},
+			fallback: 2,
+			expected: 30,
+		},
+		{
+			name:     "uses fallback when auto mode",
+			config:   Config{LoanDays: 0},
+			fallback: 120,
+			expected: 120,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.config.GetLoanPeriod(tt.fallback); got != tt.expected {
+				t.Fatalf("Expected %d, got %d", tt.expected, got)
+			}
+		})
 	}
 }

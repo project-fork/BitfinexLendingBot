@@ -13,6 +13,7 @@ MINUTES_RUN: 5
 # 貸出限制
 MIN_LOAN: 50.0
 MAX_LOAN: 1000.0
+LOAN_DAYS: 0                  # 固定借貸天數，0 代表自動判斷
 
 # 利率設定
 MIN_DAILY_LEND_RATE: 0.01  # 最低日利率 0.01%

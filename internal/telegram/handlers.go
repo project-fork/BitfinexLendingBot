@@ -81,6 +81,11 @@ func (b *Bot) handleStatus(chatID int64) {
 	// 添加機器人運行參數
 	statusMsg += fmt.Sprintf("\n\n⚙️ 機器人參數:")
 	statusMsg += fmt.Sprintf("\n單次下單限制: %d", b.config.OrderLimit)
+	if b.config.LoanDays > 0 {
+		statusMsg += fmt.Sprintf("\n固定借貸天數: %d 天", b.config.LoanDays)
+	} else {
+		statusMsg += "\n固定借貸天數: 自動判斷"
+	}
 	if b.config.IsMinDailyLendRateFRR() {
 		statusMsg += fmt.Sprintf("\n最低日利率: %s (FRR 掛單模式)", b.config.GetMinDailyRateDisplay())
 	} else {
@@ -181,6 +186,34 @@ func (b *Bot) handleSetOrderLimit(chatID int64, text string) {
 
 	b.config.OrderLimit = limit
 	b.sendMessage(chatID, fmt.Sprintf("單次執行最大下單數量限制已設定為: %d", limit))
+}
+
+// handleSetLoanDays 處理設置固定借貸天數指令
+func (b *Bot) handleSetLoanDays(chatID int64, text string) {
+	parts := strings.Split(text, " ")
+	if len(parts) != 2 {
+		b.sendMessage(chatID, "格式錯誤，請使用 /loandays [數值] 格式\n提示: 設置為 0 表示自動判斷")
+		return
+	}
+
+	days, err := strconv.Atoi(parts[1])
+	if err != nil || days < 0 {
+		b.sendMessage(chatID, "請輸入有效的非負整數\n提示: 設置為 0 表示自動判斷")
+		return
+	}
+
+	if days == 1 || days > constants.Period120Days {
+		b.sendMessage(chatID, "借貸天數必須是 0，或介於 2 到 120 之間的整數")
+		return
+	}
+
+	b.config.LoanDays = days
+	if days == 0 {
+		b.sendMessage(chatID, "固定借貸天數已設為: 自動判斷")
+		return
+	}
+
+	b.sendMessage(chatID, fmt.Sprintf("固定借貸天數已設定為: %d 天", days))
 }
 
 // handleSetMinDailyRate 處理設置最低日利率指令

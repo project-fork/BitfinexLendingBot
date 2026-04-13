@@ -439,6 +439,10 @@ func (ss *SmartStrategy) calculateSyntheticRate(depthIndex int, minDailyRate flo
 
 // calculateSmartPeriod 計算智能期間
 func (ss *SmartStrategy) calculateSmartPeriod(dailyRate float64, condition *MarketCondition) int {
+	if ss.config.LoanDays > 0 {
+		return ss.config.LoanDays
+	}
+
 	oneTwentyThreshold := ss.config.GetOneTwentyDayThresholdDecimal()
 	thirtyThreshold := ss.config.GetThirtyDayThresholdDecimal()
 

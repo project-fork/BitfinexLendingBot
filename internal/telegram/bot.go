@@ -211,6 +211,8 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 		b.handleSetReserve(chatID, text)
 	case strings.HasPrefix(text, "/orderlimit "):
 		b.handleSetOrderLimit(chatID, text)
+	case strings.HasPrefix(text, "/loandays "):
+		b.handleSetLoanDays(chatID, text)
 	case strings.HasPrefix(text, "/mindailylendrate "):
 		b.handleSetMinDailyRate(chatID, text)
 	case strings.HasPrefix(text, "/minloan "):
@@ -259,6 +261,7 @@ func (b *Bot) handleHelp(chatID int64) {
 /threshold [數值] - 設置利率通知閾值
 /reserve [數值] - 設置不參與借貸的保留金額
 /orderlimit [數值] - 設置單次執行最大下單數量限制
+/loandays [數值] - 設置固定借貸天數 (設為0使用自動判斷)
 /mindailylendrate [數值|FRR] - 設置最低每日貸出利率（FRR 為浮動利率模式）
 /minloan [數值] - 設置單筆最小貸出金額
 /maxloan [數值] - 設置單筆最大貸出金額 (設為0無限制)

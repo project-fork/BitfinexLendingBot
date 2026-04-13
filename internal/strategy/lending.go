@@ -204,7 +204,7 @@ func (lb *LendingBot) calculateHighHoldOffers(splitFundsAvailable *float64) []*L
 		offer := &LoanOffer{
 			Amount: highHold,
 			Rate:   lb.config.GetHighHoldRateDecimal(),
-			Period: constants.Period120Days,
+			Period: lb.config.GetLoanPeriod(constants.Period120Days),
 			UseFRR: false, // 高額持有單固定走一般利率單
 		}
 		offers = append(offers, offer)
@@ -284,6 +284,10 @@ func (lb *LendingBot) calculateSpreadOffers(splitFundsAvailable float64, funding
 
 // calculatePeriod 根據利率計算貸出期間
 func (lb *LendingBot) calculatePeriod(dailyRate float64) int {
+	if lb.config.LoanDays > 0 {
+		return lb.config.LoanDays
+	}
+
 	oneTwentyThreshold := lb.config.GetOneTwentyDayThresholdDecimal()
 	thirtyThreshold := lb.config.GetThirtyDayThresholdDecimal()
 
@@ -316,7 +320,7 @@ func (lb *LendingBot) placeLoanOffers(loanOffers []*LoanOffer, hasPendingOrders 
 		}
 
 		if offer.UseFRR {
-			frrPeriod := constants.Period120Days
+			frrPeriod := lb.config.GetLoanPeriod(constants.Period120Days)
 
 			if lb.config.TestMode {
 				log.Printf("🧪 [測試模式] 模擬下單 => Type: %s, Amount: %.4f, Period: %d (參考Rate: %.6f%%)",

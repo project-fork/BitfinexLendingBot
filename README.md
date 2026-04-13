@@ -39,6 +39,7 @@ BITFINEX_API_KEY: "your_api_key_here"
 BITFINEX_SECRET_KEY: "your_secret_key_here"
 CURRENCY: "USD"
 MIN_LOAN: 150
+LOAN_DAYS: 0
 MIN_DAILY_LEND_RATE: 0.02
 ```
 
@@ -60,6 +61,7 @@ RUN_ONLY_ON_NEW_CREDITS: false   # true 時改為觸發式執行
 MINUTES_RUN: 15                  # 定時模式下的主流程間隔（分鐘）
 MIN_LOAN: 150                    # 單筆最小貸出金額
 MAX_LOAN: 155                    # 單筆最大貸出金額，0 或未設為不限制
+LOAN_DAYS: 0                     # 固定借貸天數，0 為自動判斷
 RESERVE_AMOUNT: 100              # 保留不參與借貸的資金
 LENDING_CHECK_MINUTES: 10        # 借貸檢查間隔（分鐘）
 TEST_MODE: true                  # 測試模式
@@ -167,6 +169,7 @@ NOTIFY_RATE_THRESHOLD: 0.1
 /threshold [數值]                  - 設定利率通知閾值
 /reserve [數值]                    - 設定保留金額
 /orderlimit [數值]                 - 設定單次執行下單上限
+/loandays [數值]                   - 設定固定借貸天數（0 為自動）
 /mindailylendrate [數值|FRR]       - 設定最低日利率或 FRR 模式
 /minloan [數值]                    - 設定單筆最小貸出金額
 /maxloan [數值]                    - 設定單筆最大貸出金額（0 為不限制）

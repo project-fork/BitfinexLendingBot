@@ -233,6 +233,24 @@ func TestSmartStrategy_CalculateSmartPeriod(t *testing.T) {
 	}
 }
 
+func TestSmartStrategy_CalculateSmartPeriod_FixedLoanDays(t *testing.T) {
+	cfg := &config.Config{
+		LoanDays:            30,
+		VolatilityThreshold: 0.002,
+	}
+	strategy := NewSmartStrategy(cfg)
+
+	period := strategy.calculateSmartPeriod(0.00045, &MarketCondition{
+		Trend:      "rising",
+		Volatility: 0.004,
+		AvgRate:    0.0003,
+	})
+
+	if period != 30 {
+		t.Fatalf("Expected fixed period 30, got %d", period)
+	}
+}
+
 func TestSmartStrategy_CalculateSmartOffers(t *testing.T) {
 	cfg := &config.Config{
 		MinLoan:                       150.0,

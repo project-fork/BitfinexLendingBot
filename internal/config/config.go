@@ -25,8 +25,9 @@ type Config struct {
 	MinutesRun int `mapstructure:"MINUTES_RUN"` // 每隔幾分鐘清除訂單重新產生新訂單
 
 	// 貸出限制
-	MinLoan float64 `mapstructure:"MIN_LOAN"`
-	MaxLoan float64 `mapstructure:"MAX_LOAN"`
+	MinLoan  float64 `mapstructure:"MIN_LOAN"`
+	MaxLoan  float64 `mapstructure:"MAX_LOAN"`
+	LoanDays int     `mapstructure:"LOAN_DAYS"` // 固定借貸天數，0 代表依策略自動決定
 
 	// 利率策略
 	MinDailyLendRate              any     `mapstructure:"MIN_DAILY_LEND_RATE"` // 支援數值或 "FRR"
@@ -119,6 +120,15 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxLoan > 0 && c.MaxLoan < c.MinLoan {
 		return errors.NewValidationError("MAX_LOAN cannot be less than MIN_LOAN")
+	}
+	if c.LoanDays < 0 {
+		return errors.NewValidationError("LOAN_DAYS cannot be negative")
+	}
+	if c.LoanDays > constants.Period120Days {
+		return errors.NewValidationError("LOAN_DAYS cannot be greater than 120")
+	}
+	if c.LoanDays == 1 {
+		return errors.NewValidationError("LOAN_DAYS must be 0 or between 2 and 120")
 	}
 	minDailyRate, useFRR, err := c.parseMinDailyLendRate()
 	if err != nil {
@@ -283,6 +293,14 @@ func (c *Config) GetThirtyDayThresholdDecimal() float64 {
 // GetOneTwentyDayThresholdDecimal 獲取120天閾值（小數格式）
 func (c *Config) GetOneTwentyDayThresholdDecimal() float64 {
 	return c.OneTwentyDayLendRateThreshold / constants.PercentageToDecimal
+}
+
+// GetLoanPeriod 回傳實際借貸天數；若未固定設定則回傳 fallback。
+func (c *Config) GetLoanPeriod(fallback int) int {
+	if c.LoanDays > 0 {
+		return c.LoanDays
+	}
+	return fallback
 }
 
 // setSmartStrategyDefaults 設置智能策略參數的預設值
