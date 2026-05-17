@@ -48,9 +48,10 @@ const (
 
 // 智能策略預設值
 const (
-	DefaultVolatilityThreshold = 0.002 // 0.2% 日利率波動閾值
-	DefaultMaxRateMultiplier   = 2.0   // 最大2倍基礎利率
-	DefaultMinRateMultiplier   = 0.8   // 最小0.8倍基礎利率
+	DefaultVolatilityThreshold     = 0.002    // 0.2% 日利率波動閾值
+	DefaultMaxRateMultiplier       = 2.0      // 最大2倍基礎利率
+	DefaultMinRateMultiplier       = 0.8      // 最小0.8倍基礎利率
+	DefaultFundingBookRateUndercut = 0.000001 // Funding Book 利率下調量，百分比格式
 
 	// 建議值範圍
 	RecommendedVolatilityMin = 0.001 // 保守用戶建議值

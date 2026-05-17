@@ -207,6 +207,7 @@ SPREAD_LEND: 30
 GAP_BOTTOM: 10
 GAP_TOP: 5000
 LENDING_CHECK_MINUTES: 10
+FUNDING_BOOK_RATE_UNDERCUT: 0.000002
 `
 
 	// 創建臨時配置文件
@@ -239,6 +240,9 @@ LENDING_CHECK_MINUTES: 10
 	}
 	if config.LoanDays != 30 {
 		t.Errorf("Expected LoanDays to be 30, got %d", config.LoanDays)
+	}
+	if config.FundingBookRateUndercut != 0.000002 {
+		t.Errorf("Expected FundingBookRateUndercut to be 0.000002, got %.8f", config.FundingBookRateUndercut)
 	}
 }
 

@@ -32,6 +32,7 @@ VOLATILITY_THRESHOLD: 0.002     # 高波動閾值 (預設: 0.002)
 MAX_RATE_MULTIPLIER: 2.0        # 最大利率倍數 (預設: 2.0)
 MIN_RATE_MULTIPLIER: 0.8        # 最小利率倍數 (預設: 0.8)
 RATE_RANGE_INCREASE_PERCENT: 0.2 # 利率範圍增加百分比 (預設: 0.2 = 20%)
+FUNDING_BOOK_RATE_UNDERCUT: 0.000001 # Funding Book 利率下調量，百分比格式；0.000001 表示從 0.030137% 掛到 0.030136%
 
 ENABLE_KLINE_STRATEGY: false
 KLINE_TIME_FRAME: "15m"

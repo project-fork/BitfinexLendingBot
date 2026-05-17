@@ -56,6 +56,7 @@ type Config struct {
 	VolatilityThreshold      float64 `mapstructure:"VOLATILITY_THRESHOLD"`
 	MaxRateMultiplier        float64 `mapstructure:"MAX_RATE_MULTIPLIER"`
 	MinRateMultiplier        float64 `mapstructure:"MIN_RATE_MULTIPLIER"`
+	FundingBookRateUndercut  float64 `mapstructure:"FUNDING_BOOK_RATE_UNDERCUT"`  // Funding Book 利率下調量，百分比格式
 	RateRangeIncreasePercent float64 `mapstructure:"RATE_RANGE_INCREASE_PERCENT"` // 利率範圍增加百分比
 
 	// K線策略設定
@@ -161,6 +162,9 @@ func (c *Config) Validate() error {
 		}
 		if c.RateRangeIncreasePercent <= 0 || c.RateRangeIncreasePercent > 1.0 {
 			return errors.NewValidationError("RATE_RANGE_INCREASE_PERCENT must be between 0 and 1.0 (0-100%)")
+		}
+		if c.FundingBookRateUndercut < 0 || c.FundingBookRateUndercut > 0.01 {
+			return errors.NewValidationError("FUNDING_BOOK_RATE_UNDERCUT must be between 0 and 0.01")
 		}
 	}
 
@@ -320,6 +324,9 @@ func (c *Config) setSmartStrategyDefaults() {
 		if c.RateRangeIncreasePercent == 0 {
 			c.RateRangeIncreasePercent = constants.RateRangeIncreasePercent
 		}
+		if c.FundingBookRateUndercut == 0 {
+			c.FundingBookRateUndercut = constants.DefaultFundingBookRateUndercut
+		}
 	} else {
 		// 如果智能策略未啟用，確保參數有預設值以防止驗證錯誤
 		if c.VolatilityThreshold == 0 {
@@ -333,6 +340,9 @@ func (c *Config) setSmartStrategyDefaults() {
 		}
 		if c.RateRangeIncreasePercent == 0 {
 			c.RateRangeIncreasePercent = constants.RateRangeIncreasePercent
+		}
+		if c.FundingBookRateUndercut == 0 {
+			c.FundingBookRateUndercut = constants.DefaultFundingBookRateUndercut
 		}
 	}
 }

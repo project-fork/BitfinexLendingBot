@@ -388,10 +388,17 @@ func (ss *SmartStrategy) calculateProgressiveRate(fundingBook []*bitfinex.Fundin
 		log.Printf("遞增利率計算 - 訂單索引: %d, 利率範圍: %.6f%%-%.6f%%, 步長: %.6f%%, 遞增利率: %.6f%%",
 			orderIndex, minRate*100, maxRate*100, step*100, progressiveRate*100)
 
-		return progressiveRate
+		return ss.undercutFundingBookRate(progressiveRate, minDailyRate)
 	} else {
-		return minRate
+		return ss.undercutFundingBookRate(minRate, minDailyRate)
 	}
+}
+
+func (ss *SmartStrategy) undercutFundingBookRate(rate float64, minDailyRate float64) float64 {
+	// Funding book rates are decimal daily rates. The config uses percentage format,
+	// so FUNDING_BOOK_RATE_UNDERCUT=0.000001 makes 0.030137% become 0.030136%.
+	undercut := ss.config.FundingBookRateUndercut / constants.PercentageToDecimal
+	return math.Max(minDailyRate, rate-undercut)
 }
 
 // calculateSyntheticRate 計算合成利率（當無市場數據時）

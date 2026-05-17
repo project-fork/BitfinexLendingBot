@@ -157,6 +157,60 @@ func TestSmartStrategy_CalculateProgressiveRate(t *testing.T) {
 	}
 }
 
+func TestSmartStrategy_CalculateProgressiveRate_UndercutsFundingBookRate(t *testing.T) {
+	strategy := NewSmartStrategy(&config.Config{
+		RateRangeIncreasePercent: 0.2,
+		FundingBookRateUndercut:  0.000001,
+	})
+	condition := &MarketCondition{Trend: "stable"}
+	fundingBook := []*bitfinex.FundingBookEntry{
+		{Rate: 0.00030137, Amount: 1000},
+	}
+
+	rate := strategy.calculateProgressiveRate(fundingBook, 0.0003, condition, 0, 1)
+	expected := 0.00030136
+
+	if math.Abs(rate-expected) > floatTolerance {
+		t.Fatalf("expected undercut rate %.8f, got %.8f", expected, rate)
+	}
+}
+
+func TestSmartStrategy_CalculateProgressiveRate_UsesConfiguredFundingBookRateUndercut(t *testing.T) {
+	strategy := NewSmartStrategy(&config.Config{
+		RateRangeIncreasePercent: 0.2,
+		FundingBookRateUndercut:  0.000002,
+	})
+	condition := &MarketCondition{Trend: "stable"}
+	fundingBook := []*bitfinex.FundingBookEntry{
+		{Rate: 0.00030137, Amount: 1000},
+	}
+
+	rate := strategy.calculateProgressiveRate(fundingBook, 0.0003, condition, 0, 1)
+	expected := 0.00030135
+
+	if math.Abs(rate-expected) > floatTolerance {
+		t.Fatalf("expected configured undercut rate %.8f, got %.8f", expected, rate)
+	}
+}
+
+func TestSmartStrategy_CalculateProgressiveRate_DoesNotUndercutBelowMinimum(t *testing.T) {
+	strategy := NewSmartStrategy(&config.Config{
+		RateRangeIncreasePercent: 0.2,
+		FundingBookRateUndercut:  0.000001,
+	})
+	condition := &MarketCondition{Trend: "stable"}
+	fundingBook := []*bitfinex.FundingBookEntry{
+		{Rate: 0.000300005, Amount: 1000},
+	}
+
+	rate := strategy.calculateProgressiveRate(fundingBook, 0.0003, condition, 0, 1)
+	expected := 0.0003
+
+	if math.Abs(rate-expected) > floatTolerance {
+		t.Fatalf("expected minimum rate %.8f, got %.8f", expected, rate)
+	}
+}
+
 func TestSmartStrategy_CalculateSmartPeriod(t *testing.T) {
 	cfg := &config.Config{
 		ThirtyDayLendRateThreshold:    0.04,
