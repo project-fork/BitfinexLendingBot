@@ -207,6 +207,8 @@ SPREAD_LEND: 30
 GAP_BOTTOM: 10
 GAP_TOP: 5000
 LENDING_CHECK_MINUTES: 10
+SIXTY_DAY_LEND_RATE_THRESHOLD: 0.035
+NINETY_DAY_LEND_RATE_THRESHOLD: 0.04
 FUNDING_BOOK_RATE_UNDERCUT: 0.000002
 `
 
@@ -240,6 +242,12 @@ FUNDING_BOOK_RATE_UNDERCUT: 0.000002
 	}
 	if config.LoanDays != 30 {
 		t.Errorf("Expected LoanDays to be 30, got %d", config.LoanDays)
+	}
+	if config.SixtyDayLendRateThreshold != 0.035 {
+		t.Errorf("Expected SixtyDayLendRateThreshold to be 0.035, got %f", config.SixtyDayLendRateThreshold)
+	}
+	if config.NinetyDayLendRateThreshold != 0.04 {
+		t.Errorf("Expected NinetyDayLendRateThreshold to be 0.04, got %f", config.NinetyDayLendRateThreshold)
 	}
 	if config.FundingBookRateUndercut != 0.000002 {
 		t.Errorf("Expected FundingBookRateUndercut to be 0.000002, got %.8f", config.FundingBookRateUndercut)

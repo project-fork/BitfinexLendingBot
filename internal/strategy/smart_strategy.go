@@ -451,13 +451,19 @@ func (ss *SmartStrategy) calculateSmartPeriod(dailyRate float64, condition *Mark
 	}
 
 	oneTwentyThreshold := ss.config.GetOneTwentyDayThresholdDecimal()
+	ninetyThreshold := ss.config.GetNinetyDayThresholdDecimal()
+	sixtyThreshold := ss.config.GetSixtyDayThresholdDecimal()
 	thirtyThreshold := ss.config.GetThirtyDayThresholdDecimal()
 
 	// 基礎期間邏輯
 	basePeriod := constants.DefaultPeriodDays
-	if ss.config.OneTwentyDayLendRateThreshold > 0 && dailyRate >= oneTwentyThreshold {
+	if ss.config.OneTwentyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, oneTwentyThreshold) {
 		basePeriod = constants.Period120Days
-	} else if ss.config.ThirtyDayLendRateThreshold > 0 && dailyRate >= thirtyThreshold {
+	} else if ss.config.NinetyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, ninetyThreshold) {
+		basePeriod = constants.Period90Days
+	} else if ss.config.SixtyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, sixtyThreshold) {
+		basePeriod = constants.Period60Days
+	} else if ss.config.ThirtyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, thirtyThreshold) {
 		basePeriod = constants.Period30Days
 	}
 
@@ -465,7 +471,7 @@ func (ss *SmartStrategy) calculateSmartPeriod(dailyRate float64, condition *Mark
 	switch condition.Trend {
 	case "rising":
 		// 利率上升趨勢，偏向短期以便重新定價
-		if basePeriod == constants.Period120Days {
+		if basePeriod > constants.Period30Days {
 			basePeriod = constants.Period30Days
 		} else if basePeriod == constants.Period30Days {
 			basePeriod = constants.DefaultPeriodDays
@@ -475,6 +481,8 @@ func (ss *SmartStrategy) calculateSmartPeriod(dailyRate float64, condition *Mark
 		// 利率下降趨勢，鎖定當前較高利率
 		if dailyRate > condition.AvgRate*1.1 && basePeriod == constants.DefaultPeriodDays {
 			basePeriod = constants.Period30Days
+		} else if dailyRate > condition.AvgRate*1.1 && basePeriod == constants.Period30Days {
+			basePeriod = constants.Period60Days
 		}
 	}
 

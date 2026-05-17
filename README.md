@@ -75,6 +75,8 @@ SPREAD_LEND: 30                  # 分散單最大目標筆數
 GAP_BOTTOM: 10                   # 掛單深度下限
 GAP_TOP: 5000                    # 掛單深度上限
 THIRTY_DAY_LEND_RATE_THRESHOLD: 0.04
+SIXTY_DAY_LEND_RATE_THRESHOLD: 0.042
+NINETY_DAY_LEND_RATE_THRESHOLD: 0.044
 ONE_TWENTY_DAY_LEND_RATE_THRESHOLD: 0.045
 RATE_BONUS: 0.002                # 沒有未完成掛單時的利率加成
 ```

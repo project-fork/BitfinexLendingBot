@@ -35,6 +35,8 @@ type Config struct {
 	GapBottom                     float64 `mapstructure:"GAP_BOTTOM"`
 	GapTop                        float64 `mapstructure:"GAP_TOP"`
 	ThirtyDayLendRateThreshold    float64 `mapstructure:"THIRTY_DAY_LEND_RATE_THRESHOLD"`
+	SixtyDayLendRateThreshold     float64 `mapstructure:"SIXTY_DAY_LEND_RATE_THRESHOLD"`
+	NinetyDayLendRateThreshold    float64 `mapstructure:"NINETY_DAY_LEND_RATE_THRESHOLD"`
 	OneTwentyDayLendRateThreshold float64 `mapstructure:"ONE_TWENTY_DAY_LEND_RATE_THRESHOLD"`
 	RateBonus                     float64 `mapstructure:"RATE_BONUS"`
 
@@ -293,6 +295,16 @@ func (c *Config) GetHighHoldRateDecimal() float64 {
 // GetThirtyDayThresholdDecimal 獲取30天閾值（小數格式）
 func (c *Config) GetThirtyDayThresholdDecimal() float64 {
 	return c.ThirtyDayLendRateThreshold / constants.PercentageToDecimal
+}
+
+// GetSixtyDayThresholdDecimal 獲取60天閾值（小數格式）
+func (c *Config) GetSixtyDayThresholdDecimal() float64 {
+	return c.SixtyDayLendRateThreshold / constants.PercentageToDecimal
+}
+
+// GetNinetyDayThresholdDecimal 獲取90天閾值（小數格式）
+func (c *Config) GetNinetyDayThresholdDecimal() float64 {
+	return c.NinetyDayLendRateThreshold / constants.PercentageToDecimal
 }
 
 // GetOneTwentyDayThresholdDecimal 獲取120天閾值（小數格式）

@@ -214,6 +214,8 @@ func TestSmartStrategy_CalculateProgressiveRate_DoesNotUndercutBelowMinimum(t *t
 func TestSmartStrategy_CalculateSmartPeriod(t *testing.T) {
 	cfg := &config.Config{
 		ThirtyDayLendRateThreshold:    0.04,
+		SixtyDayLendRateThreshold:     0.042,
+		NinetyDayLendRateThreshold:    0.044,
 		OneTwentyDayLendRateThreshold: 0.045,
 		VolatilityThreshold:           0.002,
 	}
@@ -244,6 +246,26 @@ func TestSmartStrategy_CalculateSmartPeriod(t *testing.T) {
 				AvgRate:    0.0003,
 			},
 			expected: 30,
+		},
+		{
+			name:      "sixty day threshold",
+			dailyRate: 0.00042, // 0.042% daily rate
+			condition: &MarketCondition{
+				Trend:      "stable",
+				Volatility: 0.001,
+				AvgRate:    0.0003,
+			},
+			expected: 60,
+		},
+		{
+			name:      "ninety day threshold",
+			dailyRate: 0.00044, // 0.044% daily rate
+			condition: &MarketCondition{
+				Trend:      "stable",
+				Volatility: 0.001,
+				AvgRate:    0.0003,
+			},
+			expected: 90,
 		},
 		{
 			name:      "high rate triggers 120 day",

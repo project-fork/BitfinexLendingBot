@@ -10,6 +10,8 @@ const (
 	OfferTypeFRRDeltaVar = "FRRDELTAVAR"
 	DefaultPeriodDays    = 2
 	Period30Days         = 30
+	Period60Days         = 60
+	Period90Days         = 90
 	Period120Days        = 120
 )
 

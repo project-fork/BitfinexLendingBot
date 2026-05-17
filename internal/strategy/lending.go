@@ -289,15 +289,26 @@ func (lb *LendingBot) calculatePeriod(dailyRate float64) int {
 	}
 
 	oneTwentyThreshold := lb.config.GetOneTwentyDayThresholdDecimal()
+	ninetyThreshold := lb.config.GetNinetyDayThresholdDecimal()
+	sixtyThreshold := lb.config.GetSixtyDayThresholdDecimal()
 	thirtyThreshold := lb.config.GetThirtyDayThresholdDecimal()
 
-	if lb.config.OneTwentyDayLendRateThreshold > 0 && dailyRate >= oneTwentyThreshold {
+	if lb.config.OneTwentyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, oneTwentyThreshold) {
 		return constants.Period120Days
-	} else if lb.config.ThirtyDayLendRateThreshold > 0 && dailyRate >= thirtyThreshold {
+	} else if lb.config.NinetyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, ninetyThreshold) {
+		return constants.Period90Days
+	} else if lb.config.SixtyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, sixtyThreshold) {
+		return constants.Period60Days
+	} else if lb.config.ThirtyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, thirtyThreshold) {
 		return constants.Period30Days
 	} else {
 		return constants.DefaultPeriodDays
 	}
+}
+
+func rateMeetsThreshold(rate float64, threshold float64) bool {
+	const tolerance = 1e-12
+	return rate+tolerance >= threshold
 }
 
 // placeLoanOffers 下單
