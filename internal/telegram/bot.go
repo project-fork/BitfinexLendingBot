@@ -14,6 +14,7 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/config"
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
 	"github.com/kfrico/BitfinexLendingBot/internal/rates"
+	"github.com/kfrico/BitfinexLendingBot/internal/storage"
 )
 
 // LendingBot interface 用於避免循環依賴
@@ -30,6 +31,7 @@ type Bot struct {
 	rateConverter       *rates.Converter
 	authenticatedChatID int64
 	chatIDMutex         sync.Mutex
+	dataFilePath        string
 	restartCallback     func() error // 重啟回調函數
 	lendingBot          LendingBot   // 借貸機器人引用
 }
@@ -43,12 +45,15 @@ func NewBot(cfg *config.Config, bfxClient *bitfinex.Client) (*Bot, error) {
 
 	log.Printf("Authorized on account %s", api.Self.UserName)
 
-	return &Bot{
+	bot := &Bot{
 		api:            api,
 		config:         cfg,
 		bitfinexClient: bfxClient,
 		rateConverter:  rates.NewConverter(),
-	}, nil
+		dataFilePath:   storage.DefaultDataFilePath(),
+	}
+	bot.loadAuthenticatedChatID()
+	return bot, nil
 }
 
 // Start 啟動 Telegram 機器人
@@ -144,6 +149,7 @@ func (b *Bot) setAuthenticated(chatID int64) {
 	b.chatIDMutex.Lock()
 	defer b.chatIDMutex.Unlock()
 	b.authenticatedChatID = chatID
+	b.saveAuthenticatedChatIDLocked()
 }
 
 // getAuthenticatedChatID 獲取已驗證的聊天ID
@@ -151,6 +157,29 @@ func (b *Bot) GetAuthenticatedChatID() int64 {
 	b.chatIDMutex.Lock()
 	defer b.chatIDMutex.Unlock()
 	return b.authenticatedChatID
+}
+
+func (b *Bot) loadAuthenticatedChatID() {
+	if b.dataFilePath == "" {
+		return
+	}
+	state := storage.LoadData(b.dataFilePath)
+	if state.Telegram.AuthenticatedChatID == 0 {
+		return
+	}
+
+	b.chatIDMutex.Lock()
+	defer b.chatIDMutex.Unlock()
+	b.authenticatedChatID = state.Telegram.AuthenticatedChatID
+}
+
+func (b *Bot) saveAuthenticatedChatIDLocked() {
+	if b.dataFilePath == "" {
+		return
+	}
+	state := storage.LoadData(b.dataFilePath)
+	state.Telegram.AuthenticatedChatID = b.authenticatedChatID
+	storage.SaveData(b.dataFilePath, state)
 }
 
 // sendMessage 發送訊息
