@@ -443,6 +443,7 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 		log.Printf("首次檢查，發現 %d 個現有借貸訂單，餘額: %.2f，初始化檢查參數", len(credits), currentBalance)
 		lb.config.LastLendingCheckTime = currentTime
 		lb.config.LastAvailableBalance = currentBalance
+		lb.config.SeenFundingCreditIDs = buildSeenCreditIDs(credits)
 		return false, nil
 	}
 
@@ -450,12 +451,7 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 	var reasons []string
 
 	// 檢查1: 是否有新的借貸訂單
-	var newCredits []*bitfinex.FundingCredit
-	for _, credit := range credits {
-		if credit.MTSOpened > lb.config.LastLendingCheckTime {
-			newCredits = append(newCredits, credit)
-		}
-	}
+	newCredits := findNewCredits(credits, lb.config.SeenFundingCreditIDs, lb.config.LastLendingCheckTime)
 
 	if len(newCredits) > 0 {
 		shouldExecute = true
@@ -476,6 +472,9 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 	if balanceIncrease > increaseThreshold {
 		shouldExecute = true
 		reasons = append(reasons, fmt.Sprintf("餘額顯著增加: %.2f -> %.2f (+%.2f)", lastBalance, currentBalance, balanceIncrease))
+		if len(newCredits) == 0 {
+			lb.sendBalanceChangeNotification(lastBalance, currentBalance, balanceIncrease)
+		}
 	}
 
 	// 檢查3: 從零餘額恢復
@@ -487,6 +486,7 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 	// 更新檢查參數
 	lb.config.LastLendingCheckTime = currentTime
 	lb.config.LastAvailableBalance = currentBalance
+	lb.config.SeenFundingCreditIDs = buildSeenCreditIDs(credits)
 
 	if shouldExecute {
 		log.Printf("觸發策略執行，原因: %s", strings.Join(reasons, "; "))
@@ -495,6 +495,57 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 
 	log.Printf("無需執行策略，餘額: %.2f (上次: %.2f)，無新借貸訂單", currentBalance, lastBalance)
 	return false, nil
+}
+
+func buildSeenCreditIDs(credits []*bitfinex.FundingCredit) map[int64]struct{} {
+	seen := make(map[int64]struct{}, len(credits))
+	for _, credit := range credits {
+		if credit == nil || credit.ID == 0 {
+			continue
+		}
+		seen[credit.ID] = struct{}{}
+	}
+	return seen
+}
+
+func findNewCredits(credits []*bitfinex.FundingCredit, seen map[int64]struct{}, lastCheckTime int64) []*bitfinex.FundingCredit {
+	var newCredits []*bitfinex.FundingCredit
+	for _, credit := range credits {
+		if credit == nil {
+			continue
+		}
+		if credit.ID != 0 {
+			if _, exists := seen[credit.ID]; !exists {
+				newCredits = append(newCredits, credit)
+				continue
+			}
+		}
+		if credit.ID == 0 && credit.MTSOpened > lastCheckTime {
+			newCredits = append(newCredits, credit)
+		}
+	}
+	return newCredits
+}
+
+func (lb *LendingBot) sendBalanceChangeNotification(lastBalance, currentBalance, balanceIncrease float64) {
+	if lb.notifyCallback == nil {
+		log.Println("Telegram 通知回調未設置，跳過餘額變化通知")
+		return
+	}
+
+	message := fmt.Sprintf("💰 可用餘額變化通知\n\n餘額: %.2f -> %.2f %s\n增加: %.2f %s\n\n未從 Funding Credits API 識別到新的成交 ID，請檢查 Bitfinex 借貸狀態。",
+		lastBalance,
+		currentBalance,
+		lb.config.Currency,
+		balanceIncrease,
+		lb.config.Currency)
+
+	if err := lb.notifyCallback(message); err != nil {
+		log.Printf("發送餘額變化通知失敗: %v", err)
+		return
+	}
+
+	log.Println("餘額變化通知發送成功")
 }
 
 // sendLendingNotification 發送借貸訂單通知

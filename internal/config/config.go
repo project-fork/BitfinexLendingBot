@@ -72,6 +72,7 @@ type Config struct {
 	LastLendingCheckTime int64   // 上次檢查借貸訂單的時間戳
 	LastAvailableBalance float64 // 上次檢查時的可用餘額
 	LendingCheckMinutes  int     `mapstructure:"LENDING_CHECK_MINUTES"` // 借貸訂單檢查間隔（分鐘）
+	SeenFundingCreditIDs map[int64]struct{}
 }
 
 // LoadConfig 從文件加載配置
