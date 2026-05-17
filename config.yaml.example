@@ -3,14 +3,14 @@ BITFINEX_SECRET_KEY: "your_secret_key_here"
 
 CURRENCY: "usd"
 
-ORDER_LIMIT: 3 # 每次掛單只掛幾筆，避免一次掛太多都成立，錯過大利率
+ORDER_LIMIT: 5 # 每次掛單只掛幾筆，避免一次掛太多都成立，錯過大利率
 RUN_ONLY_ON_NEW_CREDITS: false # true 時僅在新借貸成交或可用餘額顯著增加時重跑策略
-MINUTES_RUN: 3 # 每隔幾分鐘執行一次
+MINUTES_RUN: 10 # 每隔幾分鐘執行一次
 
 MIN_LOAN: 150 # 每筆最小金額
 #MAX_LOAN: 150 # 每筆最大金額
 
-MIN_DAILY_LEND_RATE: 0.02 # 最小利率（可設為 FRR，僅分散單改用 FRR 模式；高額持有單維持 HIGH_HOLD_RATE）
+MIN_DAILY_LEND_RATE: 0.029 # 最小利率（可設為 FRR，僅分散單改用 FRR 模式；高額持有單維持 HIGH_HOLD_RATE）
 SPREAD_LEND: 30 # 分散單最大目標筆數
 GAP_BOTTOM: 10 # 參數是指ask掛單裡面第幾個index 下限 通常有好幾千個掛
 GAP_TOP: 5000 # 參數是指ask掛單裡面第幾個index 上限 通常有好幾千個掛單
@@ -18,8 +18,8 @@ THIRTY_DAY_LEND_RATE_THRESHOLD: 0.03 # 超過多少就掛30天的單
 SIXTY_DAY_LEND_RATE_THRESHOLD: 0.035 # 超過多少就掛60天的單
 NINETY_DAY_LEND_RATE_THRESHOLD: 0.04 # 超過多少就掛90天的單
 ONE_TWENTY_DAY_LEND_RATE_THRESHOLD: 0.05 # 超過多少就掛120天的單
-HIGH_HOLD_RATE: 0.1
-HIGH_HOLD_AMOUNT: 155
+HIGH_HOLD_RATE: 0.06
+HIGH_HOLD_AMOUNT: 2000
 HIGH_HOLD_ORDERS: 1
 RATE_BONUS: 0.002 # 當下次執行時沒有未成功訂單時就加利率(避免訂單成功全都在低利率上)
 
@@ -33,7 +33,7 @@ ENABLE_SMART_STRATEGY: true #啟用智能策略
 VOLATILITY_THRESHOLD: 0.002     # 高波動閾值 (預設: 0.002)
 MAX_RATE_MULTIPLIER: 2.0        # 最大利率倍數 (預設: 2.0)
 MIN_RATE_MULTIPLIER: 0.8        # 最小利率倍數 (預設: 0.8)
-RATE_RANGE_INCREASE_PERCENT: 0.2 # 利率範圍增加百分比 (預設: 0.2 = 20%)
+RATE_RANGE_INCREASE_PERCENT: 0.6 # 利率範圍增加百分比 (預設: 0.2 = 20%)
 FUNDING_BOOK_RATE_UNDERCUT: 0.000001 # Funding Book 利率下調量，百分比格式；0.000001 表示從 0.030137% 掛到 0.030136%
 
 ENABLE_KLINE_STRATEGY: false
