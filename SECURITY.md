@@ -2,18 +2,18 @@
 
 ## ⚠️ 重要安全提醒
 
-**切勿將 API 密鑰提交到版本控制系統！**
+**切勿将 API 密钥提交到版本控制系统！**
 
-## 🛡️ 安全配置設置
+## 🛡️ 安全配置设置
 
-### 方法 1: 配置文件（推薦）
+### 方法 1: 配置文件（推荐）
 
-1. 複製範例配置文件：
+1. 复制示例配置文件：
    ```bash
    cp config.yaml.example config.yaml
    ```
 
-2. 編輯 `config.yaml` 填入你的真實 API 密鑰：
+2. 编辑 `config.yaml` 填入你的真实 API 密钥：
    ```yaml
    BITFINEX_API_KEY: "your_actual_api_key_here"
    BITFINEX_SECRET_KEY: "your_actual_secret_key_here"
@@ -21,11 +21,11 @@
    TELEGRAM_AUTH_TOKEN: "your_secure_password_123"
    ```
 
-3. 確保 `config.yaml` 已在 `.gitignore` 中被忽略
+3. 确保 `config.yaml` 已在 `.gitignore` 中被忽略
 
-### 方法 2: 環境變量（更安全）
+### 方法 2: 环境变量（更安全）
 
-設置環境變量：
+设置环境变量：
 ```bash
 export BITFINEX_API_KEY="your_actual_api_key_here"
 export BITFINEX_SECRET_KEY="your_actual_secret_key_here"
@@ -33,11 +33,11 @@ export TELEGRAM_BOT_TOKEN="your_actual_telegram_bot_token"
 export TELEGRAM_AUTH_TOKEN="your_secure_password_123"
 ```
 
-程序會自動讀取環境變量，環境變量的優先級高於配置文件。
+程序会自动读取环境变量，环境变量的优先级高于配置文件。
 
 ### 方法 3: .env 文件
 
-創建 `.env` 文件（也會被 `.gitignore` 忽略）：
+创建 `.env` 文件（也会被 `.gitignore` 忽略）：
 ```bash
 BITFINEX_API_KEY=your_actual_api_key_here
 BITFINEX_SECRET_KEY=your_actual_secret_key_here
@@ -45,51 +45,51 @@ TELEGRAM_BOT_TOKEN=your_actual_telegram_bot_token
 TELEGRAM_AUTH_TOKEN=your_secure_password_123
 ```
 
-## 🔒 API 權限設置
+## 🔒 API 权限设置
 
-在 Bitfinex 創建 API 密鑰時，請確保：
+在 Bitfinex 创建 API 密钥时，请确保：
 
-1. **權限設置**：
-   - ✅ 查看錢包餘額
-   - ✅ 貸出資金
-   - ✅ 取消貸出訂單
-   - ❌ 不需要提現權限
+1. **权限设置**：
+   - ✅ 查看钱包余额
+   - ✅ 贷出资金
+   - ✅ 取消贷出订单
+   - ❌ 不需要提现权限
 
-2. **IP 限制**（強烈建議）：
-   - 限制只能從特定 IP 地址訪問
+2. **IP 限制**（强烈建议）：
+   - 限制只能从特定 IP 地址访问
 
-3. **定期更換**：
-   - 建議定期更換 API 密鑰
+3. **定期更换**：
+   - 建议定期更换 API 密钥
 
-## 🚨 如果 API 密鑰洩露
+## 🚨 如果 API 密钥泄露
 
-1. **立即撤銷** Bitfinex 上的 API 密鑰
-2. **檢查帳戶** 是否有異常活動
-3. **創建新的** API 密鑰對
-4. **檢查版本控制歷史** 是否有敏感信息提交記錄
+1. **立即撤销** Bitfinex 上的 API 密钥
+2. **检查帐户** 是否有异常活动
+3. **创建新的** API 密钥对
+4. **检查版本控制历史** 是否有敏感信息提交记录
 
-## 📋 安全檢查清單
+## 📋 安全检查清单
 
-- [ ] API 密鑰未硬編碼在代碼中
+- [ ] API 密钥未硬编码在代码中
 - [ ] `config.yaml` 在 `.gitignore` 中
-- [ ] 使用強密碼作為 Telegram 認證 token
-- [ ] API 密鑰設置了適當的權限
-- [ ] 考慮使用 IP 限制
-- [ ] 定期檢查和更換密鑰
+- [ ] 使用强密码作为 Telegram 认证 token
+- [ ] API 密钥设置了适当的权限
+- [ ] 考虑使用 IP 限制
+- [ ] 定期检查和更换密钥
 
-## 🛠️ 測試安全配置
+## 🛠️ 测试安全配置
 
-運行程序前先測試配置：
+运行程序前先测试配置：
 ```bash
-# 使用測試模式驗證配置
+# 使用测试模式验证配置
 TEST_MODE=true ./bitfinex-lending-bot
 ```
 
-如果看到類似錯誤，說明配置需要更新：
+如果看到类似错误，说明配置需要更新：
 ```
 Error: BITFINEX_API_KEY is required and must be set to your actual API key
 ```
 
-## 📞 問題回報
+## 📞 问题回报
 
-如果發現安全問題，請通過私人管道聯繫維護者，不要在公開的 issue 中報告安全漏洞。
+如果发现安全问题，请通过私人管道联系维护者，不要在公开的 issue 中报告安全漏洞。

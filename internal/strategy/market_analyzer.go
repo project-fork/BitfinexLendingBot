@@ -7,7 +7,7 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/bitfinex"
 )
 
-// MarketAnalyzer 市場分析器
+// MarketAnalyzer 市场分析器
 type MarketAnalyzer struct {
 	rateHistory    []RateSnapshot
 	maxHistorySize int
@@ -20,20 +20,20 @@ type RateSnapshot struct {
 	Volume    float64
 }
 
-// MarketCondition 市場狀況
+// MarketCondition 市场状况
 type MarketCondition struct {
 	Trend          string  // "rising", "falling", "stable"
-	Volatility     float64 // 波動率
-	LiquidityDepth int     // 流動性深度
+	Volatility     float64 // 波动率
+	LiquidityDepth int     // 流动性深度
 	AvgRate        float64 // 平均利率
-	RateRatio      float64 // 當前利率/平均利率
+	RateRatio      float64 // 当前利率/平均利率
 }
 
-// NewMarketAnalyzer 創建市場分析器
+// NewMarketAnalyzer 创建市场分析器
 func NewMarketAnalyzer() *MarketAnalyzer {
 	return &MarketAnalyzer{
 		rateHistory:    make([]RateSnapshot, 0),
-		maxHistorySize: 48, // 保留48個數據點 (12小時，每15分鐘一次)
+		maxHistorySize: 48, // 保留48个数据点 (12小时，每15分钟一次)
 	}
 }
 
@@ -47,16 +47,16 @@ func (ma *MarketAnalyzer) AddRateSnapshot(rate float64, volume float64) {
 
 	ma.rateHistory = append(ma.rateHistory, snapshot)
 
-	// 保持歷史數據大小限制
+	// 保持历史数据大小限制
 	if len(ma.rateHistory) > ma.maxHistorySize {
 		ma.rateHistory = ma.rateHistory[1:]
 	}
 }
 
-// AnalyzeMarket 分析市場狀況
+// AnalyzeMarket 分析市场状况
 func (ma *MarketAnalyzer) AnalyzeMarket(fundingBook []*bitfinex.FundingBookEntry) *MarketCondition {
 	if len(ma.rateHistory) < 3 {
-		// 數據不足，返回默認狀況
+		// 数据不足，返回默认状况
 		return &MarketCondition{
 			Trend:          "stable",
 			Volatility:     0.0,
@@ -84,7 +84,7 @@ func (ma *MarketAnalyzer) AnalyzeMarket(fundingBook []*bitfinex.FundingBookEntry
 	}
 }
 
-// calculateAverageRate 計算平均利率
+// calculateAverageRate 计算平均利率
 func (ma *MarketAnalyzer) calculateAverageRate() float64 {
 	if len(ma.rateHistory) == 0 {
 		return 0.0
@@ -98,7 +98,7 @@ func (ma *MarketAnalyzer) calculateAverageRate() float64 {
 	return sum / float64(len(ma.rateHistory))
 }
 
-// calculateVolatility 計算波動率
+// calculateVolatility 计算波动率
 func (ma *MarketAnalyzer) calculateVolatility() float64 {
 	if len(ma.rateHistory) < 2 {
 		return 0.0
@@ -116,19 +116,19 @@ func (ma *MarketAnalyzer) calculateVolatility() float64 {
 	return math.Sqrt(variance)
 }
 
-// determineTrend 判斷趨勢
+// determineTrend 判断趋势
 func (ma *MarketAnalyzer) determineTrend() string {
 	if len(ma.rateHistory) < 6 {
 		return "stable"
 	}
 
-	// 取最近6個點進行趨勢分析
+	// 取最近6个点进行趋势分析
 	recentHistory := ma.rateHistory[len(ma.rateHistory)-6:]
 
 	var upCount, downCount int
 	for i := 1; i < len(recentHistory); i++ {
 		diff := recentHistory[i].Rate - recentHistory[i-1].Rate
-		threshold := 0.0001 // 0.01%的變化閾值
+		threshold := 0.0001 // 0.01%的变化阈值
 
 		if diff > threshold {
 			upCount++
@@ -146,13 +146,13 @@ func (ma *MarketAnalyzer) determineTrend() string {
 	return "stable"
 }
 
-// AnalyzeCompetition 分析競爭對手
+// AnalyzeCompetition 分析竞争对手
 func (ma *MarketAnalyzer) AnalyzeCompetition(fundingBook []*bitfinex.FundingBookEntry) float64 {
 	if len(fundingBook) < 10 {
 		return 0.0
 	}
 
-	// 分析前10層的平均利率差
+	// 分析前10层的平均利率差
 	var totalSpread float64
 	validSpreads := 0
 
@@ -170,13 +170,13 @@ func (ma *MarketAnalyzer) AnalyzeCompetition(fundingBook []*bitfinex.FundingBook
 
 	avgSpread := totalSpread / float64(validSpreads)
 
-	// 建議利率：略高於當前最佳利率
+	// 建议利率：略高于当前最佳利率
 	return fundingBook[0].Rate + avgSpread*0.3
 }
 
-// GetOptimalDepthRange 獲取最佳深度範圍
+// GetOptimalDepthRange 获取最佳深度范围
 func (ma *MarketAnalyzer) GetOptimalDepthRange(fundsAvailable float64, condition *MarketCondition) (bottom, top float64) {
-	// 基礎範圍根據資金量調整
+	// 基础范围根据资金量调整
 	baseBottom := 10.0
 	baseTop := 1000.0
 
@@ -188,21 +188,21 @@ func (ma *MarketAnalyzer) GetOptimalDepthRange(fundsAvailable float64, condition
 		baseTop = 2000.0
 	}
 
-	// 根據市場狀況調整
+	// 根据市场状况调整
 	switch condition.Trend {
 	case "rising":
-		// 利率上升時縮小範圍，提升競爭力
+		// 利率上升时缩小范围，提升竞争力
 		baseBottom *= 1.2
 		baseTop *= 0.8
 	case "falling":
-		// 利率下降時擴大範圍，分散風險
+		// 利率下降时扩大范围，分散风险
 		baseBottom *= 0.8
 		baseTop *= 1.2
 	}
 
-	// 根據波動率調整 (使用配置的波動率閾值)
-	if condition.Volatility > 0.001 { // 高波動
-		baseTop *= 1.3 // 擴大範圍應對波動
+	// 根据波动率调整 (使用配置的波动率阈值)
+	if condition.Volatility > 0.001 { // 高波动
+		baseTop *= 1.3 // 扩大范围应对波动
 	}
 
 	return baseBottom, baseTop

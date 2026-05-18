@@ -6,7 +6,7 @@ func floorToCents(amount float64) float64 {
 	return math.Floor((amount+1e-9)*100) / 100
 }
 
-// buildOrderAmounts 盡量平均分配全部資金，並確保每筆金額介於 MIN_LOAN 與 MAX_LOAN 之間。
+// buildOrderAmounts 尽量平均分配全部资金，并确保每笔金额介于 MIN_LOAN 与 MAX_LOAN 之间。
 func buildOrderAmounts(totalFunds float64, requestedSplits int, minLoan float64, maxLoan float64) []float64 {
 	if requestedSplits <= 0 || totalFunds < minLoan {
 		return nil
@@ -16,7 +16,7 @@ func buildOrderAmounts(totalFunds float64, requestedSplits int, minLoan float64,
 
 	avgAmount := totalFunds / float64(orderCount)
 
-	// 單筆不足最小金額時，減少筆數直到可行。
+	// 单笔不足最小金额时，减少笔数直到可行。
 	for avgAmount < minLoan && orderCount > 1 {
 		orderCount--
 		avgAmount = totalFunds / float64(orderCount)
@@ -26,7 +26,7 @@ func buildOrderAmounts(totalFunds float64, requestedSplits int, minLoan float64,
 		return nil
 	}
 
-	// 單筆超過最大金額時，維持原筆數並將每筆封頂，剩餘金額保留不下。
+	// 单笔超过最大金额时，维持原笔数并将每笔封顶，剩余金额保留不下。
 	if maxLoan > 0 && avgAmount > maxLoan {
 		amounts := make([]float64, 0, orderCount)
 		for i := 0; i < orderCount; i++ {

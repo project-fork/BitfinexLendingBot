@@ -15,12 +15,12 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/errors"
 )
 
-// Client Bitfinex API 客戶端封裝
+// Client Bitfinex API 客户端封装
 type Client struct {
 	restClient *rest.Client
 }
 
-// NewClient 創建新的 Bitfinex 客戶端
+// NewClient 创建新的 Bitfinex 客户端
 func NewClient(apiKey, secretKey string) *Client {
 	client := rest.NewClient().Credentials(apiKey, secretKey)
 	return &Client{
@@ -28,15 +28,15 @@ func NewClient(apiKey, secretKey string) *Client {
 	}
 }
 
-// FundingOffer 代表一個資金貸出訂單
+// FundingOffer 代表一个资金贷出订单
 type FundingOffer struct {
 	ID     int64
 	Amount float64
-	Rate   float64 // 日利率（小數格式）
+	Rate   float64 // 日利率（小数格式）
 	Period int
 }
 
-// Wallet 代表錢包信息
+// Wallet 代表钱包信息
 type Wallet struct {
 	Currency  string
 	Type      string
@@ -44,26 +44,26 @@ type Wallet struct {
 	Available float64
 }
 
-// FundingBookEntry 代表資金訂單簿條目
+// FundingBookEntry 代表资金订单簿条目
 type FundingBookEntry struct {
-	Rate   float64 // 日利率（小數格式）
+	Rate   float64 // 日利率（小数格式）
 	Amount float64
 	Period int
 	Count  int
 }
 
-// FundingCredit 代表活躍的借貸訂單
+// FundingCredit 代表活跃的借贷订单
 type FundingCredit struct {
 	ID         int64
 	Symbol     string
 	Amount     float64
-	RateType   string  // 利率類型（frr/fixed）
-	Rate       float64 // 日利率（小數格式）
-	RateReal   float64 // 實際日利率（FRR 用）
-	Period     int64   // 期間（天）
-	MTSCreated int64   // 創建時間戳（毫秒）
-	MTSOpened  int64   // 開始時間戳（毫秒）
-	Status     string  // 狀態
+	RateType   string  // 利率类型（frr/fixed）
+	Rate       float64 // 日利率（小数格式）
+	RateReal   float64 // 实际日利率（FRR 用）
+	Period     int64   // 期间（天）
+	MTSCreated int64   // 创建时间戳（毫秒）
+	MTSOpened  int64   // 开始时间戳（毫秒）
+	Status     string  // 状态
 }
 
 // EffectiveDailyRate 返回可用的日利率（FRR 使用 RateReal）
@@ -83,35 +83,35 @@ func (fc *FundingCredit) EffectiveDailyRate() float64 {
 	return 0
 }
 
-// Candle 代表 K 線數據
+// Candle 代表 K 线数据
 type Candle struct {
-	MTS    int64   // 時間戳（毫秒）
-	Open   float64 // 開盤價
-	Close  float64 // 收盤價
-	High   float64 // 最高價
-	Low    float64 // 最低價
+	MTS    int64   // 时间戳（毫秒）
+	Open   float64 // 开盘价
+	Close  float64 // 收盘价
+	High   float64 // 最高价
+	Low    float64 // 最低价
 	Volume float64 // 成交量
 }
 
-// GetFundingOffers 獲取未完成的資金貸出訂單
+// GetFundingOffers 获取未完成的资金贷出订单
 func (c *Client) GetFundingOffers(symbol string) ([]*FundingOffer, error) {
 	offers, err := c.restClient.Funding.Offers(symbol)
 	if err != nil {
-		// 處理特殊的空響應錯誤
+		// 处理特殊的空响应错误
 		if strings.Contains(err.Error(), "data slice too short for funding offer") {
 			return []*FundingOffer{}, nil
 		}
 		return nil, errors.NewAPIError("failed to get funding offers", err)
 	}
 
-	// 處理空響應或無數據的情況
+	// 处理空响应或无数据的情况
 	if offers == nil || offers.Snapshot == nil || len(offers.Snapshot) == 0 {
 		return []*FundingOffer{}, nil
 	}
 
 	result := make([]*FundingOffer, 0, len(offers.Snapshot))
 	for _, offer := range offers.Snapshot {
-		// 添加安全檢查，防止空數據導致panic
+		// 添加安全检查，防止空数据导致panic
 		if offer == nil {
 			continue
 		}
@@ -126,7 +126,7 @@ func (c *Client) GetFundingOffers(symbol string) ([]*FundingOffer, error) {
 	return result, nil
 }
 
-// CancelFundingOffer 取消資金貸出訂單
+// CancelFundingOffer 取消资金贷出订单
 func (c *Client) CancelFundingOffer(offerID int64) error {
 	cancelReq := &fundingoffer.CancelRequest{
 		ID: offerID,
@@ -140,12 +140,12 @@ func (c *Client) CancelFundingOffer(offerID int64) error {
 	return nil
 }
 
-// SubmitFundingOffer 提交新的資金貸出訂單
+// SubmitFundingOffer 提交新的资金贷出订单
 func (c *Client) SubmitFundingOffer(symbol string, amount float64, dailyRate float64, period int, hidden bool) (int64, error) {
 	return c.submitFundingOffer(symbol, amount, dailyRate, period, hidden, constants.OfferTypeLIMIT)
 }
 
-// SubmitFundingOfferFRR 提交 FRR 型資金貸出訂單（delta = 0）
+// SubmitFundingOfferFRR 提交 FRR 型资金贷出订单（delta = 0）
 func (c *Client) SubmitFundingOfferFRR(symbol string, amount float64, period int, hidden bool) (int64, error) {
 	return c.submitFundingOffer(symbol, amount, constants.DefaultFRRDelta, period, hidden, constants.OfferTypeFRRDeltaVar)
 }
@@ -165,12 +165,12 @@ func (c *Client) submitFundingOffer(symbol string, amount float64, dailyRate flo
 		return 0, errors.NewOrderError("failed to submit funding offer", err)
 	}
 
-	// 從 notification 中提取 funding offer 資訊
+	// 从 notification 中提取 funding offer 资讯
 	if resp.NotifyInfo == nil {
 		return 0, errors.NewOrderError("funding offer response contains no order info", nil)
 	}
 
-	// 使用反射從結構體中提取 ID 字段
+	// 使用反射从结构体中提取 ID 字段
 	if orderID, hasID := extractIDFromStruct(resp.NotifyInfo); hasID {
 		return orderID, nil
 	}
@@ -178,7 +178,7 @@ func (c *Client) submitFundingOffer(symbol string, amount float64, dailyRate flo
 	return 0, errors.NewOrderError("unable to extract order ID from funding offer response", nil)
 }
 
-// GetWallets 獲取錢包信息
+// GetWallets 获取钱包信息
 func (c *Client) GetWallets() ([]*Wallet, error) {
 	wallets, err := c.restClient.Wallet.Wallet()
 	if err != nil {
@@ -198,7 +198,7 @@ func (c *Client) GetWallets() ([]*Wallet, error) {
 	return result, nil
 }
 
-// GetFundingBalance 獲取指定幣種的資金錢包餘額
+// GetFundingBalance 获取指定币种的资金钱包余额
 func (c *Client) GetFundingBalance(currency string) (float64, error) {
 	wallets, err := c.GetWallets()
 	if err != nil {
@@ -214,7 +214,7 @@ func (c *Client) GetFundingBalance(currency string) (float64, error) {
 	return 0, nil
 }
 
-// GetFundingBook 獲取資金訂單簿
+// GetFundingBook 获取资金订单簿
 func (c *Client) GetFundingBook(symbol string, limit int) ([]*FundingBookEntry, error) {
 	if limit > constants.MaxPriceLevels {
 		limit = constants.MaxPriceLevels
@@ -245,9 +245,9 @@ func (c *Client) GetFundingBook(symbol string, limit int) ([]*FundingBookEntry, 
 	return result, nil
 }
 
-// GetCurrentFundingRate 獲取當前資金利率（Flash Return Rate）
+// GetCurrentFundingRate 获取当前资金利率（Flash Return Rate）
 func (c *Client) GetCurrentFundingRate(symbol string) (float64, error) {
-	// 使用 ticker API 獲取真正的當前 funding rate (FRR)
+	// 使用 ticker API 获取真正的当前 funding rate (FRR)
 	url := fmt.Sprintf("https://api-pub.bitfinex.com/v2/ticker/%s", symbol)
 
 	resp, err := http.Get(url)
@@ -265,16 +265,16 @@ func (c *Client) GetCurrentFundingRate(symbol string) (float64, error) {
 		return 0, errors.NewAPIError("failed to decode ticker response", err)
 	}
 
-	// 檢查響應數據格式
+	// 检查响应数据格式
 	if len(tickerData) < 1 {
 		return 0, errors.NewAPIError("invalid ticker response format", nil)
 	}
 
-	// 對於 funding symbols，FRR (Flash Return Rate) 依官方文件在索引 0
+	// 对于 funding symbols，FRR (Flash Return Rate) 依官方文件在索引 0
 	if frr, ok := tickerData[0].(float64); ok {
 		return frr, nil
 	}
-	// 容錯：若索引 0 不可解析，嘗試索引 1
+	// 容错：若索引 0 不可解析，尝试索引 1
 	if len(tickerData) > 1 {
 		if frr, ok := tickerData[1].(float64); ok {
 			return frr, nil
@@ -284,25 +284,25 @@ func (c *Client) GetCurrentFundingRate(symbol string) (float64, error) {
 	return 0, errors.NewAPIError("failed to parse FRR from ticker", nil)
 }
 
-// GetFundingCredits 獲取活躍的借貸訂單
+// GetFundingCredits 获取活跃的借贷订单
 func (c *Client) GetFundingCredits(symbol string) ([]*FundingCredit, error) {
 	credits, err := c.restClient.Funding.Credits(symbol)
 	if err != nil {
-		// 處理特殊的空響應錯誤
+		// 处理特殊的空响应错误
 		if strings.Contains(err.Error(), "data slice too short") {
 			return []*FundingCredit{}, nil
 		}
 		return nil, errors.NewAPIError("failed to get funding credits", err)
 	}
 
-	// 處理空響應或無數據的情況
+	// 处理空响应或无数据的情况
 	if credits == nil || credits.Snapshot == nil || len(credits.Snapshot) == 0 {
 		return []*FundingCredit{}, nil
 	}
 
 	result := make([]*FundingCredit, 0, len(credits.Snapshot))
 	for _, credit := range credits.Snapshot {
-		// 添加安全檢查，防止空數據導致panic
+		// 添加安全检查，防止空数据导致panic
 		if credit == nil {
 			continue
 		}
@@ -323,15 +323,15 @@ func (c *Client) GetFundingCredits(symbol string) ([]*FundingCredit, error) {
 	return result, nil
 }
 
-// GetFundingCandles 獲取資金 K 線數據
+// GetFundingCandles 获取资金 K 线数据
 func (c *Client) GetFundingCandles(symbol string, timeFrame string, limit int) ([]*Candle, error) {
-	// 構建 candle key，格式: trade:15m:fUSD:a30:p2:p30
+	// 构建 candle key，格式: trade:15m:fUSD:a30:p2:p30
 	candleKey := fmt.Sprintf("trade:%s:%s:a30:p2:p30", timeFrame, symbol)
 
-	// 構建 API URL
+	// 构建 API URL
 	url := fmt.Sprintf("https://api-pub.bitfinex.com/v2/candles/%s/hist?limit=%d", candleKey, limit)
 
-	// 發送 HTTP 請求
+	// 发送 HTTP 请求
 	resp, err := http.Get(url)
 	if err != nil {
 		return nil, errors.NewAPIError("failed to get funding candles", err)
@@ -342,20 +342,20 @@ func (c *Client) GetFundingCandles(symbol string, timeFrame string, limit int) (
 		return nil, errors.NewAPIError(fmt.Sprintf("API returned status code %d", resp.StatusCode), nil)
 	}
 
-	// 解析響應
+	// 解析响应
 	var rawData [][]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&rawData); err != nil {
 		return nil, errors.NewAPIError("failed to decode candles response", err)
 	}
 
-	// 轉換為 Candle 結構
+	// 转换为 Candle 结构
 	candles := make([]*Candle, 0, len(rawData))
 	for _, raw := range rawData {
 		if len(raw) != 6 {
-			continue // 跳過無效數據
+			continue // 跳过无效数据
 		}
 
-		// 安全地轉換每個字段
+		// 安全地转换每个字段
 		mts, ok := raw[0].(float64)
 		if !ok {
 			continue
@@ -400,11 +400,11 @@ func (c *Client) GetFundingCandles(symbol string, timeFrame string, limit int) (
 	return candles, nil
 }
 
-// extractIDFromStruct 使用反射從結構體中提取ID字段
+// extractIDFromStruct 使用反射从结构体中提取ID字段
 func extractIDFromStruct(v interface{}) (int64, bool) {
 	rv := reflect.ValueOf(v)
 
-	// 如果是指針，獲取其指向的值
+	// 如果是指针，获取其指向的值
 	if rv.Kind() == reflect.Ptr {
 		if rv.IsNil() {
 			return 0, false
@@ -412,18 +412,18 @@ func extractIDFromStruct(v interface{}) (int64, bool) {
 		rv = rv.Elem()
 	}
 
-	// 必須是結構體
+	// 必须是结构体
 	if rv.Kind() != reflect.Struct {
 		return 0, false
 	}
 
-	// 嘗試查找 ID 字段
+	// 尝试查找 ID 字段
 	idField := rv.FieldByName("ID")
 	if !idField.IsValid() {
 		return 0, false
 	}
 
-	// 檢查字段類型並轉換
+	// 检查字段类型并转换
 	switch idField.Kind() {
 	case reflect.Int64:
 		return idField.Int(), true

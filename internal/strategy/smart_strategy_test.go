@@ -55,7 +55,7 @@ func TestSmartStrategy_CalculateOptimalAllocation(t *testing.T) {
 			name: "high volatility",
 			condition: &MarketCondition{
 				Trend:      "stable",
-				Volatility: 0.003, // 高於閾值
+				Volatility: 0.003, // 高于阈值
 				RateRatio:  1.0,
 			},
 			expectedHighHold: 0.6, // 0.5 + 0.1
@@ -66,7 +66,7 @@ func TestSmartStrategy_CalculateOptimalAllocation(t *testing.T) {
 			condition: &MarketCondition{
 				Trend:      "stable",
 				Volatility: 0.001,
-				RateRatio:  1.3, // 高於 1.2
+				RateRatio:  1.3, // 高于 1.2
 			},
 			expectedHighHold: 0.6, // 0.5 + 0.1
 			expectedSpread:   0.4,
@@ -115,7 +115,7 @@ func TestSmartStrategy_CalculateProgressiveRate(t *testing.T) {
 			orderIndex:   0,
 			totalOrders:  3,
 			expectMin:    0.0002,
-			expectMax:    0.0004, // 應該使用合成利率
+			expectMax:    0.0004, // 应该使用合成利率
 		},
 		{
 			name: "with funding book data",
@@ -133,7 +133,7 @@ func TestSmartStrategy_CalculateProgressiveRate(t *testing.T) {
 		{
 			name: "rates below minimum",
 			fundingBook: []*bitfinex.FundingBookEntry{
-				{Rate: 0.0001, Amount: 1000}, // 低於最小利率
+				{Rate: 0.0001, Amount: 1000}, // 低于最小利率
 			},
 			minDailyRate: 0.0002,
 			orderIndex:   0,
@@ -235,7 +235,7 @@ func TestSmartStrategy_CalculateSmartPeriod(t *testing.T) {
 				Volatility: 0.001,
 				AvgRate:    0.0003,
 			},
-			expected: 2, // 默認期間
+			expected: 2, // 默认期间
 		},
 		{
 			name:      "medium rate triggers 30 day",
@@ -285,17 +285,17 @@ func TestSmartStrategy_CalculateSmartPeriod(t *testing.T) {
 				Volatility: 0.001,
 				AvgRate:    0.0003,
 			},
-			expected: 30, // 120 -> 30 因為上升趨勢
+			expected: 30, // 120 -> 30 因为上升趋势
 		},
 		{
 			name:      "high volatility prefers shorter period",
 			dailyRate: 0.00045, // 0.045% 日利率
 			condition: &MarketCondition{
 				Trend:      "stable",
-				Volatility: 0.004, // 高波動
+				Volatility: 0.004, // 高波动
 				AvgRate:    0.0003,
 			},
-			expected: 30, // 120 -> 30 因為高波動
+			expected: 30, // 120 -> 30 因为高波动
 		},
 	}
 
@@ -358,7 +358,7 @@ func TestSmartStrategy_CalculateSmartOffers(t *testing.T) {
 	}{
 		{
 			name:           "insufficient funds",
-			fundsAvailable: 100.0, // 低於 MinLoan
+			fundsAvailable: 100.0, // 低于 MinLoan
 			expectedOffers: 0,
 		},
 		{
@@ -368,8 +368,8 @@ func TestSmartStrategy_CalculateSmartOffers(t *testing.T) {
 		},
 		{
 			name:           "sufficient funds for spread only",
-			fundsAvailable: 400.0, // 不足以做高額持有
-			expectedOffers: 2,     // 只有 spread offers (400/3 約等於每筆133，少於150所以只能分2筆)
+			fundsAvailable: 400.0, // 不足以做高额持有
+			expectedOffers: 2,     // 只有 spread offers (400/3 约等于每笔133，少于150所以只能分2笔)
 		},
 	}
 
@@ -380,7 +380,7 @@ func TestSmartStrategy_CalculateSmartOffers(t *testing.T) {
 				t.Errorf("Expected %d offers, got %d", tt.expectedOffers, len(offers))
 			}
 
-			// 驗證所有 offers 都有有效值
+			// 验证所有 offers 都有有效值
 			for i, offer := range offers {
 				if offer.Amount <= 0 {
 					t.Errorf("Offer %d has invalid amount: %f", i, offer.Amount)

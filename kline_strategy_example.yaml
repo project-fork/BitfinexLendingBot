@@ -1,82 +1,82 @@
-# Bitfinex Lending Bot - K線策略範例配置
-# 基於真實 Funding 市場 K 線數據的貸出策略
+# Bitfinex Lending Bot - K线策略示例配置
+# 基于真实 Funding 市场 K 线数据的贷出策略
 
-# API 設定
+# API 设定
 BITFINEX_API_KEY: "your_api_key_here"
 BITFINEX_SECRET_KEY: "your_secret_key_here"
 
-# 基本設定
+# 基本设定
 CURRENCY: "USD"
 ORDER_LIMIT: 10
 MINUTES_RUN: 5
 
-# 貸出限制
+# 贷出限制
 MIN_LOAN: 50.0
 MAX_LOAN: 1000.0
-LOAN_DAYS: 0                  # 固定借貸天數，0 代表自動判斷
+LOAN_DAYS: 0                  # 固定借贷天数，0 代表自动判断
 
-# 利率設定
+# 利率设定
 MIN_DAILY_LEND_RATE: 0.01  # 最低日利率 0.01%
-SPREAD_LEND: 5             # 分散單最大目標筆數
+SPREAD_LEND: 5             # 分散单最大目标笔数
 
-# 期間設定
-THIRTY_DAY_LEND_RATE_THRESHOLD: 0.05    # 30天期間閾值 0.05%
-ONE_TWENTY_DAY_LEND_RATE_THRESHOLD: 0.1 # 120天期間閾值 0.1%
+# 期间设定
+THIRTY_DAY_LEND_RATE_THRESHOLD: 0.05    # 30天期间阈值 0.05%
+ONE_TWENTY_DAY_LEND_RATE_THRESHOLD: 0.1 # 120天期间阈值 0.1%
 RATE_BONUS: 0.01  # 利率加成 0.01%
 
-# 高額持有策略
+# 高额持有策略
 HIGH_HOLD_RATE: 0.15
 HIGH_HOLD_AMOUNT: 5000.0
 HIGH_HOLD_ORDERS: 2
 
-# K線策略設定（新增）
-ENABLE_KLINE_STRATEGY: true     # 啟用K線策略
-KLINE_TIME_FRAME: "15m"         # K線時間框架：15分鐘
-KLINE_PERIOD: 24                # K線週期數量：24個15分鐘K線（6小時）
-KLINE_SPREAD_PERCENT: 5.0       # K線最高點加成百分比：5%
+# K线策略设定（新增）
+ENABLE_KLINE_STRATEGY: true     # 启用K线策略
+KLINE_TIME_FRAME: "15m"         # K线时间框架：15分钟
+KLINE_PERIOD: 24                # K线周期数量：24个15分钟K线（6小时）
+KLINE_SPREAD_PERCENT: 5.0       # K线最高点加成百分比：5%
 
-# 其他策略設定（禁用）
-ENABLE_SMART_STRATEGY: false    # 禁用智能策略，使用K線策略
+# 其他策略设定（禁用）
+ENABLE_SMART_STRATEGY: false    # 禁用智能策略，使用K线策略
 
-# Telegram 設定
+# Telegram 设定
 TELEGRAM_BOT_TOKEN: "your_telegram_bot_token"
 TELEGRAM_AUTH_TOKEN: "your_telegram_auth_token"
 
-# 通知設定
+# 通知设定
 NOTIFY_RATE_THRESHOLD: 0.1
 RESERVE_AMOUNT: 100.0
 
-# 借貸通知設定
+# 借贷通知设定
 LENDING_CHECK_MINUTES: 10
 
-# 測試模式設定
+# 测试模式设定
 TEST_MODE: false
 
-# K線策略說明：
-# - 本策略使用 Bitfinex 的 funding 市場真實 K 線數據
+# K线策略说明：
+# - 本策略使用 Bitfinex 的 funding 市场真实 K 线数据
 # - 策略原理：
-#   1. 獲取指定時間框架和週期的 K 線數據
-#   2. 找到週期內的最高利率（High 價格）
-#   3. 在最高利率基礎上加上配置的百分比作為目標利率
-#   4. 使用目標利率進行分散貸出
+#   1. 获取指定时间框架和周期的 K 线数据
+#   2. 找到周期内的最高利率（High 价格）
+#   3. 在最高利率基础上加上配置的百分比作为目标利率
+#   4. 使用目标利率进行分散贷出
 # 
-# - 參數說明：
-#   KLINE_TIME_FRAME: K線時間框架（15m, 30m, 1h, 3h, 6h, 12h, 1D）
-#   KLINE_PERIOD: 獲取多少個 K 線週期（24個15分鐘 = 6小時）
-#   KLINE_SPREAD_PERCENT: 在最高利率基礎上的加成百分比
+# - 参数说明：
+#   KLINE_TIME_FRAME: K线时间框架（15m, 30m, 1h, 3h, 6h, 12h, 1D）
+#   KLINE_PERIOD: 获取多少个 K 线周期（24个15分钟 = 6小时）
+#   KLINE_SPREAD_PERCENT: 在最高利率基础上的加成百分比
 #
-# - 策略優勢：
-#   * 基於真實市場數據做決策
-#   * 能夠捕捉市場波動趨勢
-#   * 自動調整利率以保持競爭力
-#   * 支援多種時間框架分析
+# - 策略优势：
+#   * 基于真实市场数据做决策
+#   * 能够捕捉市场波动趋势
+#   * 自动调整利率以保持竞争力
+#   * 支持多种时间框架分析
 #
-# - 建議設定：
-#   * 短期策略：15m K線，12-24週期（3-6小時）
-#   * 中期策略：1h K線，12-24週期（12-24小時）
-#   * 長期策略：6h K線，7-14週期（2-4天）
+# - 建议设定：
+#   * 短期策略：15m K线，12-24周期（3-6小时）
+#   * 中期策略：1h K线，12-24周期（12-24小时）
+#   * 长期策略：6h K线，7-14周期（2-4天）
 
-# 優先級順序：
-# 1. ENABLE_KLINE_STRATEGY (最高優先級)
-# 2. ENABLE_SMART_STRATEGY (中等優先級)
-# 3. 傳統策略 (預設策略)
+# 优先级顺序：
+# 1. ENABLE_KLINE_STRATEGY (最高优先级)
+# 2. ENABLE_SMART_STRATEGY (中等优先级)
+# 3. 传统策略 (默认策略)

@@ -195,7 +195,7 @@ func TestConfig_Validate(t *testing.T) {
 }
 
 func TestLoadConfig(t *testing.T) {
-	// 創建測試配置文件
+	// 创建测试配置文件
 	testConfigContent := `
 BITFINEX_API_KEY: "test_api_key"
 BITFINEX_SECRET_KEY: "test_secret_key"
@@ -212,7 +212,7 @@ NINETY_DAY_LEND_RATE_THRESHOLD: 0.04
 FUNDING_BOOK_RATE_UNDERCUT: 0.000002
 `
 
-	// 創建臨時配置文件
+	// 创建临时配置文件
 	tmpFile, err := os.CreateTemp("", "test_config_*.yaml")
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
@@ -224,13 +224,13 @@ FUNDING_BOOK_RATE_UNDERCUT: 0.000002
 	}
 	tmpFile.Close()
 
-	// 測試加載配置
+	// 测试加载配置
 	config, err := LoadConfig(tmpFile.Name())
 	if err != nil {
 		t.Fatalf("LoadConfig() error = %v", err)
 	}
 
-	// 驗證配置值
+	// 验证配置值
 	if config.BitfinexApiKey != "test_api_key" {
 		t.Errorf("Expected BitfinexApiKey to be 'test_api_key', got '%s'", config.BitfinexApiKey)
 	}

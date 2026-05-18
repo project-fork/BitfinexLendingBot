@@ -155,7 +155,7 @@ func TestConverter_AnnualToDaily(t *testing.T) {
 	}
 }
 
-// 測試轉換的一致性（往返轉換）
+// 测试转换的一致性（往返转换）
 func TestConverter_Consistency(t *testing.T) {
 	converter := NewConverter()
 

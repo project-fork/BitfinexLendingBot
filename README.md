@@ -1,34 +1,34 @@
-# BitfinexLendingBot 綠葉放貸機器人
+# BitfinexLendingBot 绿叶放贷机器人
 
-自動化的 Bitfinex 放貸機器人，支援傳統策略、智能策略、K 線策略、FRR 掛單模式、Telegram 控制與借貸通知。
+自动化的 Bitfinex 放贷机器人，支持传统策略、智能策略、K 线策略、FRR 挂单模式、Telegram 控制与借贷通知。
 
 目前版本：`v2.1.0`
 
 ## ✨ 主要功能
 
-- 🔄 **自動放貸**：依市場狀況自動建立放貸訂單
-- 🎯 **多策略切換**：支援傳統策略、智能策略、K 線策略
-- ⚡ **觸發式執行**：可改為只在新借貸成交或可用餘額顯著變化時重跑策略
-- 📈 **FRR 掛單模式**：`MIN_DAILY_LEND_RATE` 可設為 `FRR`
-- 🛡️ **訂單追蹤保護**：只取消程式追蹤到的掛單，避免誤取消手動建立的訂單
-- 📱 **Telegram 控制台**：可查詢狀態、策略、借貸單與動態調整參數
-- 🧪 **測試模式**：可先模擬策略與日誌，再切換正式交易
+- 🔄 **自动放贷**：依市场状况自动建立放贷订单
+- 🎯 **多策略切换**：支持传统策略、智能策略、K 线策略
+- ⚡ **触发式执行**：可改为只在新借贷成交或可用余额显着变化时重跑策略
+- 📈 **FRR 挂单模式**：`MIN_DAILY_LEND_RATE` 可设为 `FRR`
+- 🛡️ **订单追踪保护**：只取消程序追踪到的挂单，避免误取消手动建立的订单
+- 📱 **Telegram 控制台**：可查询状态、策略、借贷单与动态调整参数
+- 🧪 **测试模式**：可先模拟策略与日志，再切换正式交易
 
-## 🚀 快速開始
+## 🚀 快速开始
 
-### 安裝與執行
+### 安装与执行
 
 ```bash
-# 準備設定檔
+# 准备设定档
 cp config.yaml.example config.yaml
 
-# 編譯
+# 编译
 go build -o bitfinex-lending-bot
 
-# 執行（預設讀取 config.yaml）
+# 执行（默认读取 config.yaml）
 ./bitfinex-lending-bot
 
-# 指定設定檔
+# 指定设定档
 ./bitfinex-lending-bot -c config.yaml
 ```
 
@@ -43,48 +43,48 @@ LOAN_DAYS: 0
 MIN_DAILY_LEND_RATE: 0.02
 ```
 
-## 📋 主要配置參數
+## 📋 主要配置参数
 
-### 🔑 API 設定
+### 🔑 API 设定
 
 ```yaml
 BITFINEX_API_KEY: "xxxxxxxxxx"
 BITFINEX_SECRET_KEY: "xxxxxxxxxx"
 ```
 
-### ⚙️ 基本設定
+### ⚙️ 基本设定
 
 ```yaml
-CURRENCY: "USD"                  # 放貸幣種
-ORDER_LIMIT: 3                   # 單次執行最多建立幾筆訂單
-RUN_ONLY_ON_NEW_CREDITS: false   # true 時改為觸發式執行
-MINUTES_RUN: 15                  # 定時模式下的主流程間隔（分鐘）
-MIN_LOAN: 150                    # 單筆最小貸出金額
-MAX_LOAN: 155                    # 單筆最大貸出金額，0 或未設為不限制
-LOAN_DAYS: 0                     # 固定借貸天數，0 為自動判斷
-RESERVE_AMOUNT: 100              # 保留不參與借貸的資金
-LENDING_CHECK_MINUTES: 10        # 借貸檢查間隔（分鐘）
-TEST_MODE: true                  # 測試模式
+CURRENCY: "USD"                  # 放贷币种
+ORDER_LIMIT: 3                   # 单次执行最多建立几笔订单
+RUN_ONLY_ON_NEW_CREDITS: false   # true 时改为触发式执行
+MINUTES_RUN: 15                  # 定时模式下的主流程间隔（分钟）
+MIN_LOAN: 150                    # 单笔最小贷出金额
+MAX_LOAN: 155                    # 单笔最大贷出金额，0 或未设为不限制
+LOAN_DAYS: 0                     # 固定借贷天数，0 为自动判断
+RESERVE_AMOUNT: 100              # 保留不参与借贷的资金
+LENDING_CHECK_MINUTES: 10        # 借贷检查间隔（分钟）
+TEST_MODE: true                  # 测试模式
 ```
 
-### 📈 利率策略設定
+### 📈 利率策略设定
 
 ```yaml
-MIN_DAILY_LEND_RATE: 0.038       # 可設數值或 FRR
-SPREAD_LEND: 30                  # 分散單最大目標筆數
-GAP_BOTTOM: 10                   # 掛單深度下限
-GAP_TOP: 5000                    # 掛單深度上限
+MIN_DAILY_LEND_RATE: 0.038       # 可设数值或 FRR
+SPREAD_LEND: 30                  # 分散单最大目标笔数
+GAP_BOTTOM: 10                   # 挂单深度下限
+GAP_TOP: 5000                    # 挂单深度上限
 THIRTY_DAY_LEND_RATE_THRESHOLD: 0.04
 SIXTY_DAY_LEND_RATE_THRESHOLD: 0.042
 NINETY_DAY_LEND_RATE_THRESHOLD: 0.044
 ONE_TWENTY_DAY_LEND_RATE_THRESHOLD: 0.045
-RATE_BONUS: 0.002                # 沒有未完成掛單時的利率加成
+RATE_BONUS: 0.002                # 没有未完成挂单时的利率加成
 ```
 
-`MIN_DAILY_LEND_RATE: FRR` 時，分散單會使用 FRR 掛單模式；高額持有單仍維持 `HIGH_HOLD_RATE` 固定利率。
-`SPREAD_LEND` 是分散單的最大目標筆數，實際筆數還會受到 `ORDER_LIMIT`、高額持有已占用筆數、`MIN_LOAN`、`MAX_LOAN` 與剩餘資金影響。
+`MIN_DAILY_LEND_RATE: FRR` 时，分散单会使用 FRR 挂单模式；高额持有单仍维持 `HIGH_HOLD_RATE` 固定利率。
+`SPREAD_LEND` 是分散单的最大目标笔数，实际笔数还会受到 `ORDER_LIMIT`、高额持有已占用笔数、`MIN_LOAN`、`MAX_LOAN` 与剩余资金影响。
 
-### 💎 高額持有策略
+### 💎 高额持有策略
 
 ```yaml
 HIGH_HOLD_RATE: 0.1
@@ -102,7 +102,7 @@ MIN_RATE_MULTIPLIER: 0.8
 RATE_RANGE_INCREASE_PERCENT: 0.2
 ```
 
-### 📊 K 線策略
+### 📊 K 线策略
 
 ```yaml
 ENABLE_KLINE_STRATEGY: false
@@ -112,7 +112,7 @@ KLINE_SPREAD_PERCENT: 0
 KLINE_SMOOTH_METHOD: "ema"       # max / sma / ema / hla / p90
 ```
 
-### 📱 Telegram 設定
+### 📱 Telegram 设定
 
 ```yaml
 TELEGRAM_BOT_TOKEN: "xxxxxxxxxx"
@@ -120,131 +120,131 @@ TELEGRAM_AUTH_TOKEN: "your_auth"
 NOTIFY_RATE_THRESHOLD: 0.1
 ```
 
-## 🎯 策略與執行模式
+## 🎯 策略与执行模式
 
-### 策略優先級
+### 策略优先级
 
-1. **K 線策略**
+1. **K 线策略**
 2. **智能策略**
-3. **傳統策略**
+3. **传统策略**
 
-### 定時模式
+### 定时模式
 
 - `RUN_ONLY_ON_NEW_CREDITS: false`
-- 依 `MINUTES_RUN` 週期性重跑主流程
+- 依 `MINUTES_RUN` 周期性重跑主流程
 
-### 觸發模式
+### 触发模式
 
 - `RUN_ONLY_ON_NEW_CREDITS: true`
-- 啟動時先執行一次初始化
-- 後續只有在下列條件成立時才重跑主流程：
-  - 發現新的借貸成交
-  - 可用餘額顯著增加
+- 启动时先执行一次初始化
+- 后续只有在下列条件成立时才重跑主流程：
+  - 发现新的借贷成交
+  - 可用余额显着增加
 
-### 訂單追蹤與安全性
+### 订单追踪与安全性
 
-- 主流程只會取消程式本次執行期間追蹤到的未完成訂單
-- 手動建立、未被追蹤到的掛單不會被自動取消
-- `/restart` 會重新執行策略，但同樣只處理程式追蹤到的訂單
+- 主流程只会取消程序本次执行期间追踪到的未完成订单
+- 手动建立、未被追踪到的挂单不会被自动取消
+- `/restart` 会重新执行策略，但同样只处理程序追踪到的订单
 
 ## 📱 Telegram 指令
 
-### 驗證
+### 验证
 
 ```text
-/auth                              - 開始驗證流程
+/auth                              - 开始验证流程
 ```
 
-### 查詢
+### 查询
 
 ```text
-/rate                              - 顯示當前貸出利率和閾值
-/check                             - 檢查利率是否超過閾值
-/status                            - 顯示系統狀態
-/strategy                          - 顯示目前策略與優先級
-/lending                           - 查看活躍借貸訂單
+/rate                              - 显示当前贷出利率和阈值
+/check                             - 检查利率是否超过阈值
+/status                            - 显示系统状态
+/strategy                          - 显示目前策略与优先级
+/lending                           - 查看活跃借贷订单
 ```
 
-### 參數調整
+### 参数调整
 
 ```text
-/threshold [數值]                  - 設定利率通知閾值
-/reserve [數值]                    - 設定保留金額
-/orderlimit [數值]                 - 設定單次執行下單上限
-/loandays [數值]                   - 設定固定借貸天數（0 為自動）
-/mindailylendrate [數值|FRR]       - 設定最低日利率或 FRR 模式
-/minloan [數值]                    - 設定單筆最小貸出金額
-/maxloan [數值]                    - 設定單筆最大貸出金額（0 為不限制）
-/highholdrate [數值]               - 設定高額持有利率
-/highholdamount [數值]             - 設定高額持有金額（0 為關閉）
-/highholdorders [數值]             - 設定高額持有訂單數
-/raterangeincrease [數值]          - 設定利率範圍增加百分比
-/smoothmethod [方法]               - 設定 K 線平滑方法
+/threshold [数值]                  - 设定利率通知阈值
+/reserve [数值]                    - 设定保留金额
+/orderlimit [数值]                 - 设定单次执行下单上限
+/loandays [数值]                   - 设定固定借贷天数（0 为自动）
+/mindailylendrate [数值|FRR]       - 设定最低日利率或 FRR 模式
+/minloan [数值]                    - 设定单笔最小贷出金额
+/maxloan [数值]                    - 设定单笔最大贷出金额（0 为不限制）
+/highholdrate [数值]               - 设定高额持有利率
+/highholdamount [数值]             - 设定高额持有金额（0 为关闭）
+/highholdorders [数值]             - 设定高额持有订单数
+/raterangeincrease [数值]          - 设定利率范围增加百分比
+/smoothmethod [方法]               - 设定 K 线平滑方法
 ```
 
-### 策略切換
+### 策略切换
 
 ```text
-/klinestrategy on/off              - 切換 K 線策略
-/smartstrategy on/off              - 切換智能策略
+/klinestrategy on/off              - 切换 K 线策略
+/smartstrategy on/off              - 切换智能策略
 ```
 
 ### 控制
 
 ```text
-/restart                           - 重新執行策略
-/help                              - 顯示指令說明
+/restart                           - 重新执行策略
+/help                              - 显示指令说明
 ```
 
-## 📊 調度器架構
+## 📊 调度器架构
 
-應用程式包含三個獨立調度器：
+应用程序包含三个独立调度器：
 
-1. **主要任務**
-   - 定時模式下依 `MINUTES_RUN` 執行
-   - 觸發模式下只在初始化與觸發條件成立時執行
+1. **主要任务**
+   - 定时模式下依 `MINUTES_RUN` 执行
+   - 触发模式下只在初始化与触发条件成立时执行
 
-2. **借貸檢查**
-   - 依 `LENDING_CHECK_MINUTES` 檢查新借貸成交
-   - 追蹤可用餘額變化
-   - 發送 Telegram 借貸通知
+2. **借贷检查**
+   - 依 `LENDING_CHECK_MINUTES` 检查新借贷成交
+   - 追踪可用余额变化
+   - 发送 Telegram 借贷通知
 
-3. **每小時利率檢查**
-   - 使用最近 12 根 5 分鐘 K 線高點檢查利率閾值
-   - 超過閾值時發送 Telegram 通知
+3. **每小时利率检查**
+   - 使用最近 12 根 5 分钟 K 线高点检查利率阈值
+   - 超过阈值时发送 Telegram 通知
 
-## ⚠️ 注意事項
+## ⚠️ 注意事项
 
-1. 需要 Bitfinex API 交易權限。
-2. 首次使用建議先開啟 `TEST_MODE: true`。
-3. FRR 模式只影響分散單，高額持有單仍使用固定利率。
-4. 觸發模式不會依 `MINUTES_RUN` 定時重跑。
-5. 建議定期檢查 Telegram 狀態與借貸單內容。
+1. 需要 Bitfinex API 交易权限。
+2. 首次使用建议先开启 `TEST_MODE: true`。
+3. FRR 模式只影响分散单，高额持有单仍使用固定利率。
+4. 触发模式不会依 `MINUTES_RUN` 定时重跑。
+5. 建议定期检查 Telegram 状态与借贷单内容。
 
-## 📚 相關文件
+## 📚 相关文件
 
-- [借貸通知功能說明](LENDING_NOTIFICATION.md)
-- [智能策略詳細說明](SMART_STRATEGY.md)
-- [K 線策略範例設定](kline_strategy_example.yaml)
+- [借贷通知功能说明](LENDING_NOTIFICATION.md)
+- [智能策略详细说明](SMART_STRATEGY.md)
+- [K 线策略示例设定](kline_strategy_example.yaml)
 
-## 🆕 更新日誌
+## 🆕 更新日志
 
 ### v2.1.0
 
-- ✨ 新增 `RUN_ONLY_ON_NEW_CREDITS`，可依新借貸成交或餘額變化觸發主流程
-- 🛡️ 新增訂單追蹤機制，取消掛單時只處理程式追蹤到的訂單
-- 📈 `MIN_DAILY_LEND_RATE` 新增 `FRR` 模式，分散單可使用 FRR 掛單
-- 🔧 修正 FRR 借貸單的利率顯示、收益計算與通知內容
-- 📱 更新 Telegram `/status`、`/lending`、`/mindailylendrate` 對 FRR 的支援
+- ✨ 新增 `RUN_ONLY_ON_NEW_CREDITS`，可依新借贷成交或余额变化触发主流程
+- 🛡️ 新增订单追踪机制，取消挂单时只处理程序追踪到的订单
+- 📈 `MIN_DAILY_LEND_RATE` 新增 `FRR` 模式，分散单可使用 FRR 挂单
+- 🔧 修正 FRR 借贷单的利率显示、收益计算与通知内容
+- 📱 更新 Telegram `/status`、`/lending`、`/mindailylendrate` 对 FRR 的支持
 
 ### v2.0.3
 
-- 🔧 調整利率檢查邏輯與 API 取值
+- 🔧 调整利率检查逻辑与 API 取值
 
 ### v2.0.2
 
-- ⚙️ 新增 `/minloan` 與 `/maxloan` 指令
+- ⚙️ 新增 `/minloan` 与 `/maxloan` 指令
 
 ### v2.0.1
 
-- 🚀 初始版本釋出
+- 🚀 初始版本释出

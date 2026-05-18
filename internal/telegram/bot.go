@@ -17,13 +17,13 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/storage"
 )
 
-// LendingBot interface 用於避免循環依賴
+// LendingBot interface 用于避免循环依赖
 type LendingBot interface {
 	GetActiveLendingCredits() ([]*bitfinex.FundingCredit, error)
 	CheckRateThreshold() (bool, float64, error)
 }
 
-// Bot Telegram 機器人封裝
+// Bot Telegram 机器人封装
 type Bot struct {
 	api                 *tgbotapi.BotAPI
 	config              *config.Config
@@ -32,11 +32,11 @@ type Bot struct {
 	authenticatedChatID int64
 	chatIDMutex         sync.Mutex
 	dataFilePath        string
-	restartCallback     func() error // 重啟回調函數
-	lendingBot          LendingBot   // 借貸機器人引用
+	restartCallback     func() error // 重启回调函数
+	lendingBot          LendingBot   // 借贷机器人引用
 }
 
-// NewBot 創建新的 Telegram 機器人
+// NewBot 创建新的 Telegram 机器人
 func NewBot(cfg *config.Config, bfxClient *bitfinex.Client) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(cfg.TelegramBotToken)
 	if err != nil {
@@ -56,19 +56,19 @@ func NewBot(cfg *config.Config, bfxClient *bitfinex.Client) (*Bot, error) {
 	return bot, nil
 }
 
-// Start 啟動 Telegram 機器人
+// Start 启动 Telegram 机器人
 func (b *Bot) Start() {
-	// 創建一個永不取消的 context
+	// 创建一个永不取消的 context
 	ctx := context.Background()
 	b.StartWithContext(ctx)
 }
 
-// StartWithContext 啟動支持 context 的 Telegram 機器人
+// StartWithContext 启动支持 context 的 Telegram 机器人
 func (b *Bot) StartWithContext(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Telegram 機器人收到停止信號")
+			log.Println("Telegram 机器人收到停止信号")
 			return
 		default:
 		}
@@ -83,18 +83,18 @@ func (b *Bot) StartWithContext(ctx context.Context) {
 			// 使用 context 支持的 sleep
 			select {
 			case <-ctx.Done():
-				log.Println("Telegram 機器人在重試等待中收到停止信號")
+				log.Println("Telegram 机器人在重试等待中收到停止信号")
 				return
 			case <-time.After(constants.TelegramRetryDelay):
 				continue
 			}
 		}
 
-		// 處理更新，直到 channel 關閉或 context 取消
+		// 处理更新，直到 channel 关闭或 context 取消
 		for {
 			select {
 			case <-ctx.Done():
-				log.Println("Telegram 機器人在處理更新時收到停止信號")
+				log.Println("Telegram 机器人在处理更新时收到停止信号")
 				return
 			case update, ok := <-updates:
 				if !ok {
@@ -111,10 +111,10 @@ func (b *Bot) StartWithContext(ctx context.Context) {
 		}
 
 	retry:
-		// 使用 context 支持的重試延遲
+		// 使用 context 支持的重试延迟
 		select {
 		case <-ctx.Done():
-			log.Println("Telegram 機器人在重試前收到停止信號")
+			log.Println("Telegram 机器人在重试前收到停止信号")
 			return
 		case <-time.After(constants.TelegramRetryDelay):
 			continue
@@ -122,29 +122,29 @@ func (b *Bot) StartWithContext(ctx context.Context) {
 	}
 }
 
-// handleMessage 處理 Telegram 訊息
+// handleMessage 处理 Telegram 消息
 func (b *Bot) handleMessage(message *tgbotapi.Message) {
 	chatID := message.Chat.ID
 	text := message.Text
 
-	// 處理身份驗證
+	// 处理身份验证
 	if !b.isAuthenticated(chatID) {
 		b.handleAuthentication(chatID, text)
 		return
 	}
 
-	// 處理已驗證用戶的指令
+	// 处理已验证用户的指令
 	b.handleCommand(chatID, text)
 }
 
-// isAuthenticated 檢查是否已驗證
+// isAuthenticated 检查是否已验证
 func (b *Bot) isAuthenticated(chatID int64) bool {
 	b.chatIDMutex.Lock()
 	defer b.chatIDMutex.Unlock()
 	return b.authenticatedChatID == chatID
 }
 
-// setAuthenticated 設置已驗證的聊天ID
+// setAuthenticated 设置已验证的聊天ID
 func (b *Bot) setAuthenticated(chatID int64) {
 	b.chatIDMutex.Lock()
 	defer b.chatIDMutex.Unlock()
@@ -152,7 +152,7 @@ func (b *Bot) setAuthenticated(chatID int64) {
 	b.saveAuthenticatedChatIDLocked()
 }
 
-// getAuthenticatedChatID 獲取已驗證的聊天ID
+// getAuthenticatedChatID 获取已验证的聊天ID
 func (b *Bot) GetAuthenticatedChatID() int64 {
 	b.chatIDMutex.Lock()
 	defer b.chatIDMutex.Unlock()
@@ -182,14 +182,14 @@ func (b *Bot) saveAuthenticatedChatIDLocked() {
 	storage.SaveData(b.dataFilePath, state)
 }
 
-// sendMessage 發送訊息
+// sendMessage 发送消息
 func (b *Bot) sendMessage(chatID int64, text string) error {
 	msg := tgbotapi.NewMessage(chatID, text)
 	_, err := b.api.Send(msg)
 	return err
 }
 
-// SendNotification 發送通知（公開方法供外部調用）
+// SendNotification 发送通知（公开方法供外部调用）
 func (b *Bot) SendNotification(message string) error {
 	chatID := b.GetAuthenticatedChatID()
 	if chatID == 0 {
@@ -198,30 +198,30 @@ func (b *Bot) SendNotification(message string) error {
 	return b.sendMessage(chatID, message)
 }
 
-// SetRestartCallback 設置重啟回調函數
+// SetRestartCallback 设置重启回调函数
 func (b *Bot) SetRestartCallback(callback func() error) {
 	b.restartCallback = callback
 }
 
-// SetLendingBot 設置借貸機器人引用
+// SetLendingBot 设置借贷机器人引用
 func (b *Bot) SetLendingBot(lendingBot LendingBot) {
 	b.lendingBot = lendingBot
 }
 
-// handleAuthentication 處理身份驗證
+// handleAuthentication 处理身份验证
 func (b *Bot) handleAuthentication(chatID int64, text string) {
 	switch text {
 	case "/auth":
-		b.sendMessage(chatID, "請輸入驗證 token：")
+		b.sendMessage(chatID, "请输入验证 token：")
 	case b.config.TelegramAuthToken:
 		b.setAuthenticated(chatID)
-		b.sendMessage(chatID, "驗證成功，現在可以傳送指令了")
+		b.sendMessage(chatID, "验证成功，现在可以传送指令了")
 	default:
-		b.sendMessage(chatID, "請先進行驗證，輸入 /auth 開始驗證流程")
+		b.sendMessage(chatID, "请先进行验证，输入 /auth 开始验证流程")
 	}
 }
 
-// handleCommand 處理指令
+// handleCommand 处理指令
 func (b *Bot) handleCommand(chatID int64, text string) {
 	switch {
 	case text == "/help" || text == "/start":
@@ -271,46 +271,46 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 	case text == "/lending":
 		b.handleLendingCredits(chatID)
 	default:
-		b.sendMessage(chatID, "無效的指令，輸入 /help 查看所有可用指令")
+		b.sendMessage(chatID, "无效的指令，输入 /help 查看所有可用指令")
 	}
 }
 
-// handleHelp 處理幫助指令
+// handleHelp 处理帮助指令
 func (b *Bot) handleHelp(chatID int64) {
 	helpText := `可用指令:
 
-📊 查詢指令:
-/rate - 顯示當前貸出利率和閾值
-/check - 檢查貸出利率是否超過閾值
-/status - 顯示系統狀態
-/strategy - 顯示當前策略狀態
-/lending - 查看當前活躍的借貸訂單
+📊 查询指令:
+/rate - 显示当前贷出利率和阈值
+/check - 检查贷出利率是否超过阈值
+/status - 显示系统状态
+/strategy - 显示当前策略状态
+/lending - 查看当前活跃的借贷订单
 
-⚙️ 設置指令:
-/threshold [數值] - 設置利率通知閾值
-/reserve [數值] - 設置不參與借貸的保留金額
-/orderlimit [數值] - 設置單次執行最大下單數量限制
-/loandays [數值] - 設置固定借貸天數 (設為0使用自動判斷)
-/mindailylendrate [數值|FRR] - 設置最低每日貸出利率（FRR 為浮動利率模式）
-/minloan [數值] - 設置單筆最小貸出金額
-/maxloan [數值] - 設置單筆最大貸出金額 (設為0無限制)
-/highholdrate [數值] - 設置高額持有策略的日利率
-/highholdamount [數值] - 設置高額持有策略的金額 (設為0關閉)
-/highholdorders [數值] - 設置高額持有策略的訂單數量
-/raterangeincrease [數值] - 設置利率範圍增加百分比 (0-100%)
+⚙️ 设置指令:
+/threshold [数值] - 设置利率通知阈值
+/reserve [数值] - 设置不参与借贷的保留金额
+/orderlimit [数值] - 设置单次执行最大下单数量限制
+/loandays [数值] - 设置固定借贷天数 (设为0使用自动判断)
+/mindailylendrate [数值|FRR] - 设置最低每日贷出利率（FRR 为浮动利率模式）
+/minloan [数值] - 设置单笔最小贷出金额
+/maxloan [数值] - 设置单笔最大贷出金额 (设为0无限制)
+/highholdrate [数值] - 设置高额持有策略的日利率
+/highholdamount [数值] - 设置高额持有策略的金额 (设为0关闭)
+/highholdorders [数值] - 设置高额持有策略的订单数量
+/raterangeincrease [数值] - 设置利率范围增加百分比 (0-100%)
 
 🧠 策略指令:
-/klinestrategy on - 啟用K線策略 (最高優先級)
-/klinestrategy off - 停用K線策略
-/smartstrategy on - 啟用智能策略 (中等優先級)
+/klinestrategy on - 启用K线策略 (最高优先级)
+/klinestrategy off - 停用K线策略
+/smartstrategy on - 启用智能策略 (中等优先级)
 /smartstrategy off - 停用智能策略
-/smoothmethod [方法] - 設置K線利率平滑方法 (max/sma/ema/hla/p90)
+/smoothmethod [方法] - 设置K线利率平滑方法 (max/sma/ema/hla/p90)
 
 🔄 控制指令:
-/restart - 手動重新啟動，清除所有訂單，重新運行
-/help - 顯示此幫助訊息
+/restart - 手动重新启动，清除所有订单，重新运行
+/help - 显示此帮助消息
 
-💡 策略優先級: K線策略 > 智能策略 > 傳統策略`
+💡 策略优先级: K线策略 > 智能策略 > 传统策略`
 
 	b.sendMessage(chatID, helpText)
 }

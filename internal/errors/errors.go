@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-// 業務錯誤類型
+// 业务错误类型
 type BotError struct {
 	Code    string
 	Message string
@@ -22,7 +22,7 @@ func (e *BotError) Unwrap() error {
 	return e.Err
 }
 
-// 預定義錯誤代碼
+// 预定义错误代码
 const (
 	ErrCodeAPICall           = "API_CALL"
 	ErrCodeRateLimit         = "RATE_LIMIT"
@@ -33,7 +33,7 @@ const (
 	ErrCodeAuthentication    = "AUTH_FAILED"
 )
 
-// 創建錯誤的便利函數
+// 创建错误的便利函数
 func NewAPIError(message string, err error) *BotError {
 	return &BotError{Code: ErrCodeAPICall, Message: message, Err: err}
 }
