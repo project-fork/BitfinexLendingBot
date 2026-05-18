@@ -45,7 +45,7 @@ func (h HttpTransport) Request(req Request) ([]interface{}, error) {
 }
 
 // Do executes API request created by NewRequest method or custom *http.Request.
-func (h HttpTransport) do(req *http.Request, v interface{}) error {
+func (h HttpTransport) do(req *http.Request, v interface{}) (error) {
 	resp, err := h.httpDo(h.HTTPClient, req)
 	if err != nil {
 		return err
