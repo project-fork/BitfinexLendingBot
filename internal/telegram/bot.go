@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -34,6 +35,7 @@ type Bot struct {
 	dataFilePath        string
 	restartCallback     func() error // 重启回调函数
 	lendingBot          LendingBot   // 借贷机器人引用
+	logger              *log.Logger
 }
 
 // NewBot 创建新的 Telegram 机器人
@@ -43,17 +45,32 @@ func NewBot(cfg *config.Config, bfxClient *bitfinex.Client) (*Bot, error) {
 		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
 	}
 
-	log.Printf("Authorized on account %s", api.Self.UserName)
-
 	bot := &Bot{
 		api:            api,
 		config:         cfg,
 		bitfinexClient: bfxClient,
 		rateConverter:  rates.NewConverter(),
 		dataFilePath:   storage.DefaultDataFilePath(),
+		logger:         log.New(os.Stderr, "[TelegramBot] ", log.LstdFlags|log.Lmsgprefix),
 	}
+	bot.logger.Printf("Authorized on account %s", api.Self.UserName)
 	bot.loadAuthenticatedChatID()
 	return bot, nil
+}
+
+// SetLogger 设置日志记录器
+func (b *Bot) SetLogger(logger *log.Logger) {
+	if logger == nil {
+		return
+	}
+	b.logger = logger
+}
+
+func (b *Bot) getLogger() *log.Logger {
+	if b.logger == nil {
+		b.logger = log.New(os.Stderr, "", log.LstdFlags)
+	}
+	return b.logger
 }
 
 // Start 启动 Telegram 机器人
@@ -68,7 +85,7 @@ func (b *Bot) StartWithContext(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Println("Telegram 机器人收到停止信号")
+			b.getLogger().Println("Telegram 机器人收到停止信号")
 			return
 		default:
 		}
@@ -78,12 +95,12 @@ func (b *Bot) StartWithContext(ctx context.Context) {
 
 		updates, err := b.api.GetUpdatesChan(u)
 		if err != nil {
-			log.Printf("Failed to get updates, retrying in %v: %v", constants.TelegramRetryDelay, err)
+			b.getLogger().Printf("Failed to get updates, retrying in %v: %v", constants.TelegramRetryDelay, err)
 
 			// 使用 context 支持的 sleep
 			select {
 			case <-ctx.Done():
-				log.Println("Telegram 机器人在重试等待中收到停止信号")
+				b.getLogger().Println("Telegram 机器人在重试等待中收到停止信号")
 				return
 			case <-time.After(constants.TelegramRetryDelay):
 				continue
@@ -94,11 +111,11 @@ func (b *Bot) StartWithContext(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Println("Telegram 机器人在处理更新时收到停止信号")
+				b.getLogger().Println("Telegram 机器人在处理更新时收到停止信号")
 				return
 			case update, ok := <-updates:
 				if !ok {
-					log.Printf("Update channel closed, retrying in %v...", constants.TelegramRetryDelay)
+					b.getLogger().Printf("Update channel closed, retrying in %v...", constants.TelegramRetryDelay)
 					goto retry
 				}
 
@@ -114,7 +131,7 @@ func (b *Bot) StartWithContext(ctx context.Context) {
 		// 使用 context 支持的重试延迟
 		select {
 		case <-ctx.Done():
-			log.Println("Telegram 机器人在重试前收到停止信号")
+			b.getLogger().Println("Telegram 机器人在重试前收到停止信号")
 			return
 		case <-time.After(constants.TelegramRetryDelay):
 			continue

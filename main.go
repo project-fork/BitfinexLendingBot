@@ -27,6 +27,10 @@ type Application struct {
 	telegramBot   *telegram.Bot
 	lendingBot    *strategy.LendingBot
 	rateConverter *rates.Converter
+	mainLogger    *log.Logger
+	lendingLogger *log.Logger
+	hourlyLogger  *log.Logger
+	telegramLogger *log.Logger
 
 	// 并发控制
 	ctx    context.Context
@@ -36,6 +40,7 @@ type Application struct {
 	// 主任务执行追踪
 	mainTaskRunCount int
 	mainTaskMu       sync.Mutex
+	mainTaskRunning  bool
 }
 
 // NewApplication 创建新的应用程序实例
@@ -70,9 +75,16 @@ func NewApplication(configPath string) (*Application, error) {
 		telegramBot:   telegramBot,
 		lendingBot:    lendingBot,
 		rateConverter: rateConverter,
+		mainLogger:    newPrefixedLogger("MainTask", os.Stderr),
+		lendingLogger: newPrefixedLogger("LendingCheck", os.Stderr),
+		hourlyLogger:  newPrefixedLogger("HourlyRateCheck", os.Stderr),
+		telegramLogger: newPrefixedLogger("TelegramBot", os.Stderr),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
+
+	telegramBot.SetLogger(app.telegramLogger)
+	lendingBot.SetLogger(app.mainLogger)
 
 	// 设置 Telegram bot 重启回调
 	telegramBot.SetRestartCallback(app.handleRestart)
@@ -88,8 +100,6 @@ func NewApplication(configPath string) (*Application, error) {
 
 // Run 运行应用程序
 func (app *Application) Run() error {
-	log.Printf("Config loaded successfully: %+v", app.config)
-
 	// 显示运行模式
 	if app.config.TestMode {
 		log.Println("🧪 === 测试模式启动 ===")
@@ -161,16 +171,39 @@ func (app *Application) startWorkers() {
 
 // runWorker 安全运行工作任务
 func (app *Application) runWorker(name string, worker func()) {
+	logger := app.getTaskLogger(name)
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("工作任务 %s 发生 panic: %v", name, r)
+			logger.Printf("工作任务 %s 发生 panic: %v", name, r)
 			// 可以在这里添加重启逻辑
 		}
 	}()
 
-	log.Printf("启动工作任务: %s", name)
+	logger.Printf("启动工作任务: %s", name)
 	worker()
-	log.Printf("工作任务 %s 已结束", name)
+	logger.Printf("工作任务 %s 已结束", name)
+}
+
+func (app *Application) getTaskLogger(name string) *log.Logger {
+	switch name {
+	case "MainTask":
+		if app.mainLogger != nil {
+			return app.mainLogger
+		}
+	case "LendingCheck":
+		if app.lendingLogger != nil {
+			return app.lendingLogger
+		}
+	case "HourlyRateCheck":
+		if app.hourlyLogger != nil {
+			return app.hourlyLogger
+		}
+	case "TelegramBot":
+		if app.telegramLogger != nil {
+			return app.telegramLogger
+		}
+	}
+	return log.Default()
 }
 
 // shutdown 优雅关闭应用程序
@@ -202,18 +235,18 @@ func (app *Application) shutdown() error {
 func (app *Application) scheduleMainTask() {
 	// 如果启用了仅在触发条件时执行的模式（新借贷订单或余额变化），则不进行定时执行
 	if app.config.RunOnlyOnNewCredits {
-		log.Println("启用了触发条件执行模式（新借贷订单或余额变化），主要任务将由检查触发")
+		app.mainLogger.Println("启用了触发条件执行模式（新借贷订单或余额变化），主要任务将由检查触发")
 		// 先执行第一次初始化
 		app.executeMainTask("启动初始化")
 
 		// 等待 context 取消
 		<-app.ctx.Done()
-		log.Println("主要任务调度器收到停止信号")
+		app.mainLogger.Println("主要任务调度器收到停止信号")
 		return
 	}
 
 	// 传统的定时执行模式
-	log.Printf("启用定时执行模式，间隔: %d 分钟", app.config.MinutesRun)
+	app.mainLogger.Printf("启用定时执行模式，间隔: %d 分钟", app.config.MinutesRun)
 	// 先执行第一次
 	app.executeMainTask("启动初始化")
 
@@ -223,7 +256,7 @@ func (app *Application) scheduleMainTask() {
 	for {
 		select {
 		case <-app.ctx.Done():
-			log.Println("主要任务调度器收到停止信号")
+			app.mainLogger.Println("主要任务调度器收到停止信号")
 			return
 		case <-ticker.C:
 			app.executeMainTask(fmt.Sprintf("定时触发（每 %d 分钟）", app.config.MinutesRun))
@@ -236,25 +269,31 @@ func (app *Application) executeMainTask(trigger string) {
 	app.mainTaskMu.Lock()
 	app.mainTaskRunCount++
 	runID := app.mainTaskRunCount
+	app.mainTaskRunning = true
 	app.mainTaskMu.Unlock()
+	defer func() {
+		app.mainTaskMu.Lock()
+		app.mainTaskRunning = false
+		app.mainTaskMu.Unlock()
+	}()
 
-	log.Println("============================================================")
-	log.Printf("🔁 开始重跑主策略 #%d", runID)
-	log.Printf("📍 触发来源: %s", trigger)
-	log.Printf("🕒 触发时间: %s", time.Now().Format("2006-01-02 15:04:05"))
-	log.Println("============================================================")
+	app.mainLogger.Println("============================================================")
+	app.mainLogger.Printf("🔁 开始重跑主策略 #%d", runID)
+	app.mainLogger.Printf("📍 触发来源: %s", trigger)
+	app.mainLogger.Printf("🕒 触发时间: %s", time.Now().Format("2006-01-02 15:04:05"))
+	app.mainLogger.Println("============================================================")
 
 	if err := app.lendingBot.Execute(); err != nil {
-		log.Printf("❌ 主策略 #%d 执行失败（触发来源: %s）: %v", runID, trigger, err)
-		log.Println("============================================================")
-		log.Printf("🔚 结束主策略 #%d（失败）", runID)
-		log.Println("============================================================")
+		app.mainLogger.Printf("❌ 主策略 #%d 执行失败（触发来源: %s）: %v", runID, trigger, err)
+		app.mainLogger.Println("============================================================")
+		app.mainLogger.Printf("🔚 结束主策略 #%d（失败）", runID)
+		app.mainLogger.Println("============================================================")
 		return
 	}
 
-	log.Println("============================================================")
-	log.Printf("✅ 结束主策略 #%d（成功）", runID)
-	log.Println("============================================================")
+	app.mainLogger.Println("============================================================")
+	app.mainLogger.Printf("✅ 结束主策略 #%d（成功）", runID)
+	app.mainLogger.Println("============================================================")
 }
 
 // scheduleHourlyRateCheck 调度每小时利率检查
@@ -262,7 +301,7 @@ func (app *Application) scheduleHourlyRateCheck() {
 	for {
 		select {
 		case <-app.ctx.Done():
-			log.Println("利率检查调度器收到停止信号")
+			app.hourlyLogger.Println("利率检查调度器收到停止信号")
 			return
 		default:
 		}
@@ -274,12 +313,12 @@ func (app *Application) scheduleHourlyRateCheck() {
 		}
 
 		delay := next.Sub(now)
-		log.Printf("下次执行时间: %s, 等待时间: %s", next.Format("2006-01-02 15:04:05"), delay)
+		app.hourlyLogger.Printf("下次执行时间: %s, 等待时间: %s", next.Format("2006-01-02 15:04:05"), delay)
 
 		// 使用 context 支持的 sleep
 		select {
 		case <-app.ctx.Done():
-			log.Println("利率检查调度器在等待中收到停止信号")
+				app.hourlyLogger.Println("利率检查调度器在等待中收到停止信号")
 			return
 		case <-time.After(delay):
 			app.checkRateThreshold()
@@ -289,27 +328,27 @@ func (app *Application) scheduleHourlyRateCheck() {
 
 // checkRateThreshold 检查利率阈值
 func (app *Application) checkRateThreshold() {
-	log.Println("定时检查贷出利率（基于5分钟K线12根高点）...")
+	app.hourlyLogger.Println("定时检查贷出利率（基于5分钟K线12根高点）...")
 
 	exceeded, percentageRate, err := app.lendingBot.CheckRateThreshold()
 	if err != nil {
-		log.Printf("取得利率数据失败: %v", err)
+		app.hourlyLogger.Printf("取得利率数据失败: %v", err)
 		return
 	}
 
-	log.Printf("最近1小时最高利率: %.4f%%, 阈值: %.4f%%", percentageRate, app.config.NotifyRateThreshold)
+	app.hourlyLogger.Printf("最近1小时最高利率: %.4f%%, 阈值: %.4f%%", percentageRate, app.config.NotifyRateThreshold)
 
 	if exceeded {
 		message := fmt.Sprintf("⚠️ 定时检查提醒: 最近1小时最高利率 %.4f%% 已超过阈值 %.4f%%\n\n📊 检查方式: 5分钟K线最近12根高点分析",
 			percentageRate, app.config.NotifyRateThreshold)
 
 		if err := app.telegramBot.SendNotification(message); err != nil {
-			log.Printf("发送 Telegram 通知失败: %v", err)
+			app.hourlyLogger.Printf("发送 Telegram 通知失败: %v", err)
 		} else {
-			log.Printf("成功发送利率提醒")
+			app.hourlyLogger.Printf("成功发送利率提醒")
 		}
 	} else {
-		log.Println("最近1小时最高利率低于阈值，无需发送通知")
+		app.hourlyLogger.Println("最近1小时最高利率低于阈值，无需发送通知")
 	}
 }
 
@@ -335,7 +374,7 @@ func (app *Application) scheduleLendingCheck() {
 	for {
 		select {
 		case <-app.ctx.Done():
-			log.Println("借贷检查调度器收到停止信号")
+	log.Println("借贷检查调度器收到停止信号")
 			return
 		case <-ticker.C:
 			app.executeLendingCheck()
@@ -345,15 +384,24 @@ func (app *Application) scheduleLendingCheck() {
 
 // executeLendingCheck 执行借贷订单检查
 func (app *Application) executeLendingCheck() {
+	app.mainTaskMu.Lock()
+	mainTaskRunning := app.mainTaskRunning
+	app.mainTaskMu.Unlock()
+
+	if mainTaskRunning {
+		app.lendingLogger.Println("主任务执行中，跳过借贷检查")
+		return
+	}
+
 	hasNewCredits, err := app.lendingBot.CheckNewLendingCredits()
 	if err != nil {
-		log.Printf("检查借贷订单失败: %v", err)
+		app.lendingLogger.Printf("检查借贷订单失败: %v", err)
 		return
 	}
 
 	// 如果启用了触发条件执行模式，且满足触发条件（新借贷订单或余额变化），触发主要任务执行
 	if app.config.RunOnlyOnNewCredits && hasNewCredits {
-		log.Println("满足执行触发条件，触发主要任务执行")
+		app.lendingLogger.Println("满足执行触发条件，触发主要任务执行")
 		app.executeMainTask("借贷检查触发（新借贷订单或余额变化）")
 	}
 }

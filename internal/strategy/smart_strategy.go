@@ -3,6 +3,7 @@ package strategy
 import (
 	"log"
 	"math"
+	"os"
 
 	"github.com/kfrico/BitfinexLendingBot/internal/bitfinex"
 	"github.com/kfrico/BitfinexLendingBot/internal/config"
@@ -13,6 +14,7 @@ import (
 type SmartStrategy struct {
 	config   *config.Config
 	analyzer *MarketAnalyzer
+	logger   *log.Logger
 }
 
 // NewSmartStrategy 创建智能策略引擎
@@ -20,7 +22,23 @@ func NewSmartStrategy(cfg *config.Config) *SmartStrategy {
 	return &SmartStrategy{
 		config:   cfg,
 		analyzer: NewMarketAnalyzer(),
+		logger:   log.New(os.Stderr, "", log.LstdFlags),
 	}
+}
+
+// SetLogger 设置日志记录器
+func (ss *SmartStrategy) SetLogger(logger *log.Logger) {
+	if logger == nil {
+		return
+	}
+	ss.logger = logger
+}
+
+func (ss *SmartStrategy) getLogger() *log.Logger {
+	if ss.logger == nil {
+		ss.logger = log.New(os.Stderr, "", log.LstdFlags)
+	}
+	return ss.logger
 }
 
 // CalculateSmartOffers 计算智能贷出订单
@@ -40,24 +58,22 @@ func (ss *SmartStrategy) CalculateSmartOffers(fundsAvailable float64, fundingBoo
 
 	// 分析市场状况
 	marketCondition := ss.analyzer.AnalyzeMarket(fundingBook)
-	log.Printf("市场状况 - 趋势: %s, 波动率: %.6f, 利率比例: %.2f",
+	ss.getLogger().Printf("市场状况 - 趋势: %s, 波动率: %.6f, 利率比例: %.2f",
 		marketCondition.Trend, marketCondition.Volatility, marketCondition.RateRatio)
 
-	// 动态资金配置
-	highHoldRatio, spreadRatio := ss.calculateOptimalAllocation(marketCondition)
-
 	splitFundsAvailable := fundsAvailable
-	highHoldAmount := fundsAvailable * highHoldRatio
-	spreadAmount := fundsAvailable * spreadRatio
-
-	log.Printf("资金配置 - 高额持有: %.2f%% (%.2f), 分散贷出: %.2f%% (%.2f)",
-		highHoldRatio*100, highHoldAmount, spreadRatio*100, spreadAmount)
 
 	// 高额持有策略（动态利率）
-	if ss.config.HighHoldAmount > ss.config.MinLoan && highHoldAmount >= ss.config.HighHoldAmount {
+	if ss.config.HighHoldAmount > ss.config.MinLoan || splitFundsAvailable >= ss.config.MinLoan {
 		highHoldOffers := ss.calculateSmartHighHoldOffers(&splitFundsAvailable, marketCondition, fundingBook)
 		loanOffers = append(loanOffers, highHoldOffers...)
 	}
+
+	// 对高额持有之后的剩余资金做智能分配，用于分散单深度/激进度判断。
+	_, spreadRatio := ss.calculateOptimalAllocation(marketCondition)
+	spreadAmount := splitFundsAvailable * spreadRatio
+	ss.getLogger().Printf("剩余资金配置 - 高额持有优先后余额: %.2f, 分散贷出参考比例: %.2f%% (%.2f)",
+		splitFundsAvailable, spreadRatio*100, spreadAmount)
 
 	// 分散贷出策略（智能优化）
 	if splitFundsAvailable >= ss.config.MinLoan {
@@ -115,10 +131,17 @@ func (ss *SmartStrategy) calculateSmartHighHoldOffers(splitFundsAvailable *float
 	}
 
 	highHold := ss.config.HighHoldAmount
+	if *splitFundsAvailable < highHold {
+		highHold = *splitFundsAvailable
+	}
 	if ss.config.MaxLoan > 0 && highHold > ss.config.MaxLoan {
 		highHold = ss.config.MaxLoan
 	}
 	highHold = floorToCents(highHold)
+
+	if highHold < ss.config.MinLoan {
+		return offers
+	}
 
 	// 计算动态利率
 	dynamicRate := ss.calculateDynamicHighHoldRate(condition, fundingBook)
@@ -129,7 +152,7 @@ func (ss *SmartStrategy) calculateSmartHighHoldOffers(splitFundsAvailable *float
 	possibleOrders := int(*splitFundsAvailable / highHold)
 	actualOrders := int(math.Min(float64(ordersCount), float64(possibleOrders)))
 
-	log.Printf("智能高额持有 - 动态利率: %.4f%%, 期间: %d天, 订单数: %d",
+	ss.getLogger().Printf("智能高额持有 - 动态利率: %.4f%%, 期间: %d天, 订单数: %d",
 		dynamicRate*100, period, actualOrders)
 
 	for i := 0; i < actualOrders; i++ {
@@ -215,7 +238,7 @@ func (ss *SmartStrategy) calculateSmartSpreadOffers(splitFundsAvailable float64,
 
 	minDailyRate := ss.config.GetMinDailyRateDecimal()
 
-	log.Printf("智能分散策略 - 实际分散笔数: %d, 深度范围: %.0f-%.0f, Funding Book数据: %d笔",
+	ss.getLogger().Printf("智能分散策略 - 实际分散笔数: %d, 深度范围: %.0f-%.0f, Funding Book数据: %d笔",
 		len(orderAmounts), gapBottom, gapTop, len(fundingBook))
 
 	orderIndex := 0 // 订单索引，用于确保每个订单有不同的索引
@@ -263,7 +286,7 @@ func (ss *SmartStrategy) calculateSmartSpreadOffers(splitFundsAvailable float64,
 		}
 		offers = append(offers, offer)
 
-		log.Printf("智能订单 #%d - 利率: %.6f%%, 金额: %.2f, 期间: %d天, 深度索引: %d",
+		ss.getLogger().Printf("智能订单 #%d - 利率: %.6f%%, 金额: %.2f, 期间: %d天, 深度索引: %d",
 			len(offers), rate*100, allocAmount, period, currentDepthIndex)
 
 		nextLend += gapClimb
@@ -308,7 +331,7 @@ func (ss *SmartStrategy) calculateSmartRate(depthIndex int, fundingBook []*bitfi
 			rate = marketRate
 		}
 
-		log.Printf("市场数据利率计算 - 深度索引: %d, 市场利率: %.6f%%, 最终利率: %.6f%%",
+		ss.getLogger().Printf("市场数据利率计算 - 深度索引: %d, 市场利率: %.6f%%, 最终利率: %.6f%%",
 			depthIndex, fundingBook[depthIndex].Rate*100, rate*100)
 	} else {
 		// 深度超出范围时，使用合成利率
@@ -362,7 +385,7 @@ func (ss *SmartStrategy) calculateProgressiveRate(fundingBook []*bitfinex.Fundin
 		}
 	}
 
-	log.Printf("Funding Book 利率分析 - 有效利率数量: %d, 原始范围: %.6f%%-%.6f%%",
+	ss.getLogger().Printf("Funding Book 利率分析 - 有效利率数量: %d, 原始范围: %.6f%%-%.6f%%",
 		len(rates), minRate*100, maxRate*100)
 
 	// 确保最小利率不低于配置的最小利率
@@ -379,13 +402,13 @@ func (ss *SmartStrategy) calculateProgressiveRate(fundingBook []*bitfinex.Fundin
 			// 使用基础利率创建递增范围
 			maxRate = minRate * (1.0 + ss.config.RateRangeIncreasePercent)
 			rateRange = maxRate - minRate
-			log.Printf("利率范围太小，使用人工范围: %.6f%%-%.6f%%", minRate*100, maxRate*100)
+			ss.getLogger().Printf("利率范围太小，使用人工范围: %.6f%%-%.6f%%", minRate*100, maxRate*100)
 		}
 
 		step := rateRange / float64(totalOrders-1)
 		progressiveRate := minRate + step*float64(orderIndex)
 
-		log.Printf("递增利率计算 - 订单索引: %d, 利率范围: %.6f%%-%.6f%%, 步长: %.6f%%, 递增利率: %.6f%%",
+		ss.getLogger().Printf("递增利率计算 - 订单索引: %d, 利率范围: %.6f%%-%.6f%%, 步长: %.6f%%, 递增利率: %.6f%%",
 			orderIndex, minRate*100, maxRate*100, step*100, progressiveRate*100)
 
 		return ss.undercutFundingBookRate(progressiveRate, minDailyRate)
@@ -438,7 +461,7 @@ func (ss *SmartStrategy) calculateSyntheticRate(depthIndex int, minDailyRate flo
 		syntheticRate = maxRate
 	}
 
-	log.Printf("合成利率计算 - 深度索引: %d, 基础利率: %.6f%%, 合成利率: %.6f%%, 趋势: %s",
+	ss.getLogger().Printf("合成利率计算 - 深度索引: %d, 基础利率: %.6f%%, 合成利率: %.6f%%, 趋势: %s",
 		depthIndex, minDailyRate*100, syntheticRate*100, condition.Trend)
 
 	return syntheticRate

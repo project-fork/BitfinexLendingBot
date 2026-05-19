@@ -367,9 +367,9 @@ func TestSmartStrategy_CalculateSmartOffers(t *testing.T) {
 			expectedOffers: 4, // 1 high hold + 3 spread offers
 		},
 		{
-			name:           "sufficient funds for spread only",
+			name:           "sufficient funds for high hold only",
 			fundsAvailable: 400.0, // 不足以做高额持有
-			expectedOffers: 2,     // 只有 spread offers (400/3 约等于每笔133，少于150所以只能分2笔)
+			expectedOffers: 1,     // 余额不足目标高额单时，直接用可用余额挂一笔高额持有单
 		},
 	}
 
@@ -402,6 +402,71 @@ func TestSmartStrategy_CalculateSmartOffers(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSmartStrategy_CalculateSmartOffers_UsesAvailableBalanceForHighHold(t *testing.T) {
+	cfg := &config.Config{
+		MinLoan:                       150.0,
+		MaxLoan:                       1000.0,
+		SpreadLend:                    3,
+		HighHoldAmount:                500.0,
+		HighHoldOrders:                1,
+		HighHoldRate:                  0.1,
+		MinDailyLendRate:              0.02,
+		ThirtyDayLendRateThreshold:    0.04,
+		OneTwentyDayLendRateThreshold: 0.045,
+		EnableSmartStrategy:           true,
+		VolatilityThreshold:           0.002,
+		MaxRateMultiplier:             2.0,
+		MinRateMultiplier:             0.8,
+	}
+	strategy := NewSmartStrategy(cfg)
+
+	fundingBook := []*bitfinex.FundingBookEntry{
+		{Rate: 0.0003, Amount: 1000},
+		{Rate: 0.0004, Amount: 2000},
+	}
+
+	offers := strategy.CalculateSmartOffers(400.0, fundingBook)
+	if len(offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(offers))
+	}
+	if offers[0].Amount != 400.0 {
+		t.Fatalf("expected high hold amount 400.00, got %.2f", offers[0].Amount)
+	}
+}
+
+func TestSmartStrategy_CalculateSmartOffers_PrioritizesHighHoldBeforeAllocation(t *testing.T) {
+	cfg := &config.Config{
+		MinLoan:                       150.0,
+		MaxLoan:                       1000.0,
+		SpreadLend:                    3,
+		HighHoldAmount:                500.0,
+		HighHoldOrders:                1,
+		HighHoldRate:                  0.1,
+		MinDailyLendRate:              0.02,
+		ThirtyDayLendRateThreshold:    0.04,
+		OneTwentyDayLendRateThreshold: 0.045,
+		EnableSmartStrategy:           true,
+		VolatilityThreshold:           0.002,
+		MaxRateMultiplier:             2.0,
+		MinRateMultiplier:             0.8,
+	}
+	strategy := NewSmartStrategy(cfg)
+
+	fundingBook := []*bitfinex.FundingBookEntry{
+		{Rate: 0.0003, Amount: 1000},
+		{Rate: 0.0004, Amount: 2000},
+		{Rate: 0.0005, Amount: 1500},
+	}
+
+	offers := strategy.CalculateSmartOffers(434.62, fundingBook)
+	if len(offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(offers))
+	}
+	if offers[0].Amount != 434.62 {
+		t.Fatalf("expected high hold amount 434.62, got %.2f", offers[0].Amount)
 	}
 }
 

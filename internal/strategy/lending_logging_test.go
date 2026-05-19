@@ -12,6 +12,7 @@ import (
 )
 
 func TestCalculateSpreadOffers_LogsPricingDecision(t *testing.T) {
+	reader, writer := io.Pipe()
 	bot := &LendingBot{
 		config: &config.Config{
 			MinDailyLendRate:              0.03,
@@ -26,6 +27,7 @@ func TestCalculateSpreadOffers_LogsPricingDecision(t *testing.T) {
 			OneTwentyDayLendRateThreshold: 0.045,
 		},
 		rateConverter: rates.NewConverter(),
+		logger:        log.New(writer, "", log.LstdFlags),
 	}
 
 	fundingBook := []*bitfinex.FundingBookEntry{
@@ -37,12 +39,20 @@ func TestCalculateSpreadOffers_LogsPricingDecision(t *testing.T) {
 		{Rate: 0.000295},
 	}
 
-	logs := captureLogs(func() {
-		offers := bot.calculateSpreadOffers(431.985884, fundingBook, 10)
-		if len(offers) != 2 {
-			t.Fatalf("expected 2 offers, got %d", len(offers))
-		}
-	})
+	var builder strings.Builder
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&builder, reader)
+		close(done)
+	}()
+
+	offers := bot.calculateSpreadOffers(431.985884, fundingBook, 10)
+	if len(offers) != 2 {
+		t.Fatalf("expected 2 offers, got %d", len(offers))
+	}
+	_ = writer.Close()
+	<-done
+	logs := builder.String()
 
 	expectedFragments := []string{
 		"分散策略 - 剩余资金",
@@ -61,6 +71,7 @@ func TestCalculateSpreadOffers_LogsPricingDecision(t *testing.T) {
 }
 
 func TestPlaceLoanOffers_LogsRateBonusDecision(t *testing.T) {
+	reader, writer := io.Pipe()
 	bot := &LendingBot{
 		config: &config.Config{
 			MinLoan:    150,
@@ -70,35 +81,12 @@ func TestPlaceLoanOffers_LogsRateBonusDecision(t *testing.T) {
 			OrderLimit: 10,
 		},
 		rateConverter: rates.NewConverter(),
+		logger:        log.New(writer, "", log.LstdFlags),
 	}
 
 	offers := []*LoanOffer{
 		{Amount: 215.99, Rate: 0.0003, Period: 30},
 	}
-
-	logs := captureLogs(func() {
-		if err := bot.placeLoanOffers(offers, false); err != nil {
-			t.Fatalf("expected no error, got %v", err)
-		}
-	})
-
-	if !strings.Contains(logs, "下单决策 - 无既有待处理订单") {
-		t.Fatalf("expected rate bonus decision log, got:\n%s", logs)
-	}
-	if !strings.Contains(logs, "RATE_BONUS 0.001000%") {
-		t.Fatalf("expected RATE_BONUS value in logs, got:\n%s", logs)
-	}
-}
-
-func captureLogs(fn func()) string {
-	originalWriter := log.Writer()
-	originalFlags := log.Flags()
-	reader, writer := io.Pipe()
-	log.SetOutput(writer)
-	defer func() {
-		log.SetOutput(originalWriter)
-		log.SetFlags(originalFlags)
-	}()
 
 	var builder strings.Builder
 	done := make(chan struct{})
@@ -107,9 +95,17 @@ func captureLogs(fn func()) string {
 		close(done)
 	}()
 
-	fn()
-
+	if err := bot.placeLoanOffers(offers, false); err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
 	_ = writer.Close()
 	<-done
-	return builder.String()
+	logs := builder.String()
+
+	if !strings.Contains(logs, "下单决策 - 无既有待处理订单") {
+		t.Fatalf("expected rate bonus decision log, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "RATE_BONUS 0.001000%") {
+		t.Fatalf("expected RATE_BONUS value in logs, got:\n%s", logs)
+	}
 }
