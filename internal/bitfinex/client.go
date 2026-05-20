@@ -36,6 +36,20 @@ type FundingOffer struct {
 	Period int
 }
 
+// PendingFundingOffer 代表一个未成交资金贷出订单及其追踪状态
+type PendingFundingOffer struct {
+	FundingOffer
+	IsTracked bool
+}
+
+// FundingOfferCancelSummary 代表取消未成交订单的结果统计
+type FundingOfferCancelSummary struct {
+	Total     int
+	Cancelled int
+	Skipped   int
+	Failed    int
+}
+
 // Wallet 代表钱包信息
 type Wallet struct {
 	Currency  string

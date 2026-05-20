@@ -18,12 +18,24 @@ import (
 // LendingBot 贷出机器人
 type LendingBot struct {
 	config         *config.Config
-	client         *bitfinex.Client
+	client         fundingClient
 	rateConverter  *rates.Converter
 	smartStrategy  *SmartStrategy
 	orderTracker   *tracker.BotOrderTracker
 	notifyCallback func(string) error // Telegram 通知回调函数
 	logger         *log.Logger
+}
+
+type fundingClient interface {
+	GetFundingBook(symbol string, limit int) ([]*bitfinex.FundingBookEntry, error)
+	GetFundingOffers(symbol string) ([]*bitfinex.FundingOffer, error)
+	CancelFundingOffer(offerID int64) error
+	GetFundingBalance(currency string) (float64, error)
+	SubmitFundingOffer(symbol string, amount float64, dailyRate float64, period int, hidden bool) (int64, error)
+	SubmitFundingOfferFRR(symbol string, amount float64, period int, hidden bool) (int64, error)
+	GetFundingCandles(symbol string, timeFrame string, limit int) ([]*bitfinex.Candle, error)
+	GetFundingCredits(symbol string) ([]*bitfinex.FundingCredit, error)
+	GetCurrentFundingRate(symbol string) (float64, error)
 }
 
 // NewLendingBot 创建新的贷出机器人
@@ -65,24 +77,45 @@ type LoanOffer struct {
 	UseFRR bool // 是否使用 FRR 挂单模式
 }
 
-// Execute 执行机器人主要逻辑
+// Execute 执行机器人主要逻辑（默认不取消既有未成交订单）
 func (lb *LendingBot) Execute() error {
+	return lb.execute(false)
+}
+
+// ExecuteWithOfferCancellation 执行机器人主要逻辑，并先取消程序追踪到的未成交订单。
+func (lb *LendingBot) ExecuteWithOfferCancellation() error {
+	return lb.execute(true)
+}
+
+func (lb *LendingBot) execute(cancelTrackedOffers bool) error {
 	logger := lb.getLogger()
 	logger.Println("开始执行贷出机器人...")
 
 	// 清理旧的订单记录（避免记忆体泄漏）
 	lb.orderTracker.CleanOldOrders(24 * time.Hour)
 
-	// 取消程序创建的未完成订单
-	logger.Println("取消程序创建的未完成订单...")
-	hasPendingOrders, err := lb.cancelAllOffers()
+	hasPendingOrders, err := lb.hasTrackedPendingOffers()
 	if err != nil {
-		logger.Printf("取消订单失败: %v", err)
+		logger.Printf("获取未成交订单失败: %v", err)
 		return err
 	}
 
-	// 等待订单取消完成
-	time.Sleep(constants.RetryDelay)
+	if cancelTrackedOffers {
+		// 取消程序创建的未完成订单
+		logger.Println("取消程序创建的未完成订单...")
+		hasPendingOrders, err = lb.cancelAllOffers()
+		if err != nil {
+			logger.Printf("取消订单失败: %v", err)
+			return err
+		}
+
+		// 等待订单取消完成
+		time.Sleep(constants.RetryDelay)
+	} else if hasPendingOrders {
+		logger.Println("检测到程序追踪的未成交订单，本轮保留现有订单并继续补单")
+	} else {
+		logger.Println("目前没有程序追踪的未成交订单")
+	}
 
 	// 获取可用资金
 	logger.Println("取得可用额度...")
@@ -131,40 +164,90 @@ func (lb *LendingBot) Execute() error {
 	return lb.placeLoanOffers(loanOffers, hasPendingOrders)
 }
 
-// cancelAllOffers 取消程序创建的未完成订单
-func (lb *LendingBot) cancelAllOffers() (bool, error) {
-	offers, err := lb.client.GetFundingOffers(lb.config.GetFundingSymbol())
+func (lb *LendingBot) hasTrackedPendingOffers() (bool, error) {
+	offers, err := lb.ListPendingFundingOffers()
 	if err != nil {
 		return false, err
 	}
 
-	if len(offers) == 0 {
-		lb.getLogger().Println("目前没有未完成的订单")
-		return false, nil
+	for _, offer := range offers {
+		if offer != nil && offer.IsTracked {
+			return true, nil
+		}
 	}
 
-	cancelledCount := 0
+	return false, nil
+}
+
+// cancelAllOffers 取消程序创建的未完成订单
+func (lb *LendingBot) cancelAllOffers() (bool, error) {
+	summary, err := lb.CancelPendingFundingOffers(false)
+	if err != nil {
+		return false, err
+	}
+
+	return summary.Cancelled > 0, nil
+}
+
+// ListPendingFundingOffers 获取当前币种的未成交订单，并标记是否为程序追踪订单。
+func (lb *LendingBot) ListPendingFundingOffers() ([]*bitfinex.PendingFundingOffer, error) {
+	offers, err := lb.client.GetFundingOffers(lb.config.GetFundingSymbol())
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]*bitfinex.PendingFundingOffer, 0, len(offers))
 	for _, offer := range offers {
-		// 只取消程序追踪的订单
-		if !lb.orderTracker.IsTrackedOrder(offer.ID) {
+		if offer == nil {
+			continue
+		}
+		result = append(result, &bitfinex.PendingFundingOffer{
+			FundingOffer: *offer,
+			IsTracked:    lb.orderTracker.IsTrackedOrder(offer.ID),
+		})
+	}
+
+	return result, nil
+}
+
+// CancelPendingFundingOffers 取消当前币种的未成交订单。
+// includeAll 为 false 时，仅取消程序追踪到的订单；为 true 时取消全部未成交订单。
+func (lb *LendingBot) CancelPendingFundingOffers(includeAll bool) (*bitfinex.FundingOfferCancelSummary, error) {
+	offers, err := lb.ListPendingFundingOffers()
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &bitfinex.FundingOfferCancelSummary{
+		Total: len(offers),
+	}
+	if len(offers) == 0 {
+		lb.getLogger().Println("目前没有未完成的订单")
+		return summary, nil
+	}
+
+	for _, offer := range offers {
+		if !includeAll && !offer.IsTracked {
 			lb.getLogger().Printf("跳过手动创建的订单 ID: %d", offer.ID)
+			summary.Skipped++
 			continue
 		}
 
 		if err := lb.client.CancelFundingOffer(offer.ID); err != nil {
 			lb.getLogger().Printf("取消程序订单失败: %v", err)
+			summary.Failed++
 		} else {
 			lb.getLogger().Printf("成功取消程序订单 ID: %d", offer.ID)
-			lb.orderTracker.RemoveOrder(offer.ID) // 从追踪中移除
-			cancelledCount++
+			lb.orderTracker.RemoveOrder(offer.ID)
+			summary.Cancelled++
 		}
 	}
 
-	if cancelledCount == 0 {
+	if summary.Cancelled == 0 {
 		lb.getLogger().Println("没有程序创建的订单需要取消")
 	}
 
-	return cancelledCount > 0, nil
+	return summary, nil
 }
 
 // getAvailableFunds 获取可用资金

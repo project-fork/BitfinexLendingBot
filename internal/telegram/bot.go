@@ -2,8 +2,10 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -22,6 +24,8 @@ import (
 type LendingBot interface {
 	GetActiveLendingCredits() ([]*bitfinex.FundingCredit, error)
 	CheckRateThreshold() (bool, float64, error)
+	ListPendingFundingOffers() ([]*bitfinex.PendingFundingOffer, error)
+	CancelPendingFundingOffers(includeAll bool) (*bitfinex.FundingOfferCancelSummary, error)
 }
 
 // Bot Telegram 机器人封装
@@ -33,9 +37,20 @@ type Bot struct {
 	authenticatedChatID int64
 	chatIDMutex         sync.Mutex
 	dataFilePath        string
-	restartCallback     func() error // 重启回调函数
+	restartCallback     func() error // 取消订单后重跑回调函数
+	runCallback         func() error // 保留未成交订单直接重跑回调函数
 	lendingBot          LendingBot   // 借贷机器人引用
 	logger              *log.Logger
+	sendMessageFunc     func(chatID int64, text string) error
+	sendChattableFunc   func(c tgbotapi.Chattable) error
+	answerCallbackFunc  func(config tgbotapi.CallbackConfig) error
+	pendingReplies      map[int64]string
+	pendingRepliesMu    sync.Mutex
+}
+
+type telegramCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
 }
 
 // NewBot 创建新的 Telegram 机器人
@@ -52,10 +67,73 @@ func NewBot(cfg *config.Config, bfxClient *bitfinex.Client) (*Bot, error) {
 		rateConverter:  rates.NewConverter(),
 		dataFilePath:   storage.DefaultDataFilePath(),
 		logger:         log.New(os.Stderr, "[TelegramBot] ", log.LstdFlags|log.Lmsgprefix),
+		pendingReplies: make(map[int64]string),
 	}
 	bot.logger.Printf("Authorized on account %s", api.Self.UserName)
 	bot.loadAuthenticatedChatID()
+	if err := bot.registerCommands(); err != nil {
+		bot.logger.Printf("注册 Telegram 命令失败: %v", err)
+	}
 	return bot, nil
+}
+
+func buildTelegramCommands() []telegramCommand {
+	return []telegramCommand{
+		{Command: "help", Description: "帮助 | 显示帮助消息"},
+		{Command: "start", Description: "帮助 | 显示帮助消息"},
+
+		{Command: "rate", Description: "查询 | 显示当前贷出利率"},
+		{Command: "check", Description: "查询 | 检查利率阈值"},
+		{Command: "status", Description: "查询 | 显示系统状态"},
+		{Command: "strategy", Description: "查询 | 显示当前策略"},
+		{Command: "lending", Description: "查询 | 查看活跃借贷"},
+		{Command: "offers", Description: "查询 | 查看未成交订单"},
+
+		{Command: "threshold", Description: "设置 | 利率通知阈值"},
+		{Command: "reserve", Description: "设置 | 保留金额"},
+		{Command: "orderlimit", Description: "设置 | 单次下单限制"},
+		{Command: "loandays", Description: "设置 | 固定借贷天数"},
+		{Command: "mindailylendrate", Description: "设置 | 最低每日利率"},
+		{Command: "minloan", Description: "设置 | 单笔最小金额"},
+		{Command: "maxloan", Description: "设置 | 单笔最大金额"},
+		{Command: "highholdrate", Description: "设置 | 高额持有利率"},
+		{Command: "highholdamount", Description: "设置 | 高额持有金额"},
+		{Command: "highholdorders", Description: "设置 | 高额持有订单数"},
+		{Command: "raterangeincrease", Description: "设置 | 利率范围增加"},
+		{Command: "smoothmethod", Description: "设置 | K线平滑方法"},
+
+		{Command: "smartstrategy", Description: "策略 | 切换智能策略"},
+		{Command: "klinestrategy", Description: "策略 | 切换K线策略"},
+
+		{Command: "restart", Description: "控制 | 取消追踪订单后重跑"},
+		{Command: "run", Description: "控制 | 保留订单直接重跑"},
+		{Command: "canceloffers", Description: "控制 | 取消未成交订单"},
+	}
+}
+
+func buildSetMyCommandsParams() (url.Values, error) {
+	rawCommands, err := json.Marshal(buildTelegramCommands())
+	if err != nil {
+		return nil, err
+	}
+
+	params := url.Values{}
+	params.Set("commands", string(rawCommands))
+	return params, nil
+}
+
+func (b *Bot) registerCommands() error {
+	if b.api == nil {
+		return nil
+	}
+
+	params, err := buildSetMyCommandsParams()
+	if err != nil {
+		return err
+	}
+
+	_, err = b.api.MakeRequest("setMyCommands", params)
+	return err
 }
 
 // SetLogger 设置日志记录器
@@ -119,6 +197,11 @@ func (b *Bot) StartWithContext(ctx context.Context) {
 					goto retry
 				}
 
+				if update.CallbackQuery != nil {
+					go b.handleCallbackQuery(update.CallbackQuery)
+					continue
+				}
+
 				if update.Message == nil {
 					continue
 				}
@@ -147,6 +230,10 @@ func (b *Bot) handleMessage(message *tgbotapi.Message) {
 	// 处理身份验证
 	if !b.isAuthenticated(chatID) {
 		b.handleAuthentication(chatID, text)
+		return
+	}
+
+	if b.handlePendingReply(message) {
 		return
 	}
 
@@ -201,9 +288,50 @@ func (b *Bot) saveAuthenticatedChatIDLocked() {
 
 // sendMessage 发送消息
 func (b *Bot) sendMessage(chatID int64, text string) error {
+	if b.sendMessageFunc != nil {
+		return b.sendMessageFunc(chatID, text)
+	}
 	msg := tgbotapi.NewMessage(chatID, text)
 	_, err := b.api.Send(msg)
 	return err
+}
+
+func (b *Bot) sendChattable(c tgbotapi.Chattable) error {
+	if b.sendChattableFunc != nil {
+		return b.sendChattableFunc(c)
+	}
+	_, err := b.api.Send(c)
+	return err
+}
+
+func (b *Bot) answerCallback(config tgbotapi.CallbackConfig) error {
+	if b.answerCallbackFunc != nil {
+		return b.answerCallbackFunc(config)
+	}
+	_, err := b.api.AnswerCallbackQuery(config)
+	return err
+}
+
+func (b *Bot) setPendingReply(chatID int64, command string) {
+	b.pendingRepliesMu.Lock()
+	defer b.pendingRepliesMu.Unlock()
+	if b.pendingReplies == nil {
+		b.pendingReplies = make(map[int64]string)
+	}
+	b.pendingReplies[chatID] = command
+}
+
+func (b *Bot) getPendingReply(chatID int64) (string, bool) {
+	b.pendingRepliesMu.Lock()
+	defer b.pendingRepliesMu.Unlock()
+	command, ok := b.pendingReplies[chatID]
+	return command, ok
+}
+
+func (b *Bot) clearPendingReply(chatID int64) {
+	b.pendingRepliesMu.Lock()
+	defer b.pendingRepliesMu.Unlock()
+	delete(b.pendingReplies, chatID)
 }
 
 // SendNotification 发送通知（公开方法供外部调用）
@@ -218,6 +346,11 @@ func (b *Bot) SendNotification(message string) error {
 // SetRestartCallback 设置重启回调函数
 func (b *Bot) SetRestartCallback(callback func() error) {
 	b.restartCallback = callback
+}
+
+// SetRunCallback 设置保留未成交订单直接重跑的回调函数
+func (b *Bot) SetRunCallback(callback func() error) {
+	b.runCallback = callback
 }
 
 // SetLendingBot 设置借贷机器人引用
@@ -245,34 +378,38 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 		b.handleHelp(chatID)
 	case text == "/restart":
 		b.handleRestart(chatID)
+	case text == "/run":
+		b.handleRun(chatID)
 	case text == "/rate":
 		b.handleRate(chatID)
 	case text == "/check":
 		b.handleCheck(chatID)
 	case text == "/status":
 		b.handleStatus(chatID)
-	case strings.HasPrefix(text, "/threshold "):
+	case text == "/threshold" || strings.HasPrefix(text, "/threshold "):
 		b.handleSetThreshold(chatID, text)
-	case strings.HasPrefix(text, "/reserve "):
+	case text == "/reserve" || strings.HasPrefix(text, "/reserve "):
 		b.handleSetReserve(chatID, text)
-	case strings.HasPrefix(text, "/orderlimit "):
+	case text == "/orderlimit" || strings.HasPrefix(text, "/orderlimit "):
 		b.handleSetOrderLimit(chatID, text)
-	case strings.HasPrefix(text, "/loandays "):
+	case text == "/loandays" || strings.HasPrefix(text, "/loandays "):
 		b.handleSetLoanDays(chatID, text)
-	case strings.HasPrefix(text, "/mindailylendrate "):
+	case text == "/mindailylendrate" || strings.HasPrefix(text, "/mindailylendrate "):
 		b.handleSetMinDailyRate(chatID, text)
-	case strings.HasPrefix(text, "/minloan "):
+	case text == "/minloan" || strings.HasPrefix(text, "/minloan "):
 		b.handleSetMinLoan(chatID, text)
-	case strings.HasPrefix(text, "/maxloan "):
+	case text == "/maxloan" || strings.HasPrefix(text, "/maxloan "):
 		b.handleSetMaxLoan(chatID, text)
-	case strings.HasPrefix(text, "/highholdrate "):
+	case text == "/highholdrate" || strings.HasPrefix(text, "/highholdrate "):
 		b.handleSetHighHoldRate(chatID, text)
-	case strings.HasPrefix(text, "/highholdamount "):
+	case text == "/highholdamount" || strings.HasPrefix(text, "/highholdamount "):
 		b.handleSetHighHoldAmount(chatID, text)
-	case strings.HasPrefix(text, "/highholdorders "):
+	case text == "/highholdorders" || strings.HasPrefix(text, "/highholdorders "):
 		b.handleSetHighHoldOrders(chatID, text)
-	case strings.HasPrefix(text, "/raterangeincrease "):
+	case text == "/raterangeincrease" || strings.HasPrefix(text, "/raterangeincrease "):
 		b.handleSetRateRangeIncrease(chatID, text)
+	case text == "/offers":
+		b.handlePendingOffers(chatID)
 	case text == "/strategy":
 		b.handleStrategyStatus(chatID)
 	case text == "/smartstrategy on":
@@ -287,6 +424,8 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 		b.handleSetSmoothMethod(chatID, text)
 	case text == "/lending":
 		b.handleLendingCredits(chatID)
+	case text == "/canceloffers" || strings.HasPrefix(text, "/canceloffers "):
+		b.handleCancelPendingOffers(chatID, text)
 	default:
 		b.sendMessage(chatID, "无效的指令，输入 /help 查看所有可用指令")
 	}
@@ -302,6 +441,7 @@ func (b *Bot) handleHelp(chatID int64) {
 /status - 显示系统状态
 /strategy - 显示当前策略状态
 /lending - 查看当前活跃的借贷订单
+/offers - 查看当前未成交订单（含程序追踪标记）
 
 ⚙️ 设置指令:
 /threshold [数值] - 设置利率通知阈值
@@ -324,7 +464,9 @@ func (b *Bot) handleHelp(chatID int64) {
 /smoothmethod [方法] - 设置K线利率平滑方法 (max/sma/ema/hla/p90)
 
 🔄 控制指令:
-/restart - 手动重新启动，清除所有订单，重新运行
+/restart - 取消程序追踪到的未成交订单后重新执行策略
+/run - 直接重新执行策略，保留现有未成交订单
+/canceloffers [all] - 取消未成交订单，默认仅取消程序追踪订单；加 all 取消全部
 /help - 显示此帮助消息
 
 💡 策略优先级: K线策略 > 智能策略 > 传统策略`

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
+
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
 )
 
@@ -134,9 +136,106 @@ func (b *Bot) handleStatus(chatID int64) {
 	b.sendMessage(chatID, statusMsg)
 }
 
+// handlePendingOffers 处理未成交订单查询指令
+func (b *Bot) handlePendingOffers(chatID int64) {
+	if b.lendingBot == nil {
+		b.sendMessage(chatID, "❌ 借贷机器人未初始化")
+		return
+	}
+
+	offers, err := b.lendingBot.ListPendingFundingOffers()
+	if err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("❌ 获取未成交订单失败: %v", err))
+		return
+	}
+
+	if len(offers) == 0 {
+		b.sendMessage(chatID, "📭 当前没有未成交订单")
+		return
+	}
+
+	message := "📭 当前未成交订单\n\n"
+	totalAmount := 0.0
+	trackedCount := 0
+
+	displayCount := len(offers)
+	if displayCount > 10 {
+		displayCount = 10
+	}
+
+	for i := 0; i < displayCount; i++ {
+		offer := offers[i]
+		totalAmount += offer.Amount
+
+		orderType := "手动挂单"
+		if offer.IsTracked {
+			orderType = "程序追踪"
+			trackedCount++
+		}
+
+		message += fmt.Sprintf("📊 订单 #%d (ID: %d)\n", i+1, offer.ID)
+		message += fmt.Sprintf("💵 金额: %.2f %s\n", offer.Amount, b.config.Currency)
+		message += fmt.Sprintf("📈 日利率: %.4f%%\n", b.rateConverter.DecimalToPercentage(offer.Rate))
+		message += fmt.Sprintf("⏰ 期间: %d 天\n", offer.Period)
+		message += fmt.Sprintf("🔖 类型: %s\n\n", orderType)
+	}
+
+	for i := displayCount; i < len(offers); i++ {
+		totalAmount += offers[i].Amount
+		if offers[i].IsTracked {
+			trackedCount++
+		}
+	}
+
+	manualCount := len(offers) - trackedCount
+	if len(offers) > 10 {
+		message += fmt.Sprintf("... 还有 %d 个订单未显示\n\n", len(offers)-10)
+	}
+
+	message += "📊 统计信息:\n"
+	message += fmt.Sprintf("总订单数: %d\n", len(offers))
+	message += fmt.Sprintf("总金额: %.2f %s\n", totalAmount, b.config.Currency)
+	message += fmt.Sprintf("程序追踪: %d\n", trackedCount)
+	message += fmt.Sprintf("手动挂单: %d", manualCount)
+
+	b.sendMessage(chatID, message)
+}
+
+func (b *Bot) handlePendingReply(message *tgbotapi.Message) bool {
+	if message == nil || message.Chat == nil {
+		return false
+	}
+
+	command, ok := b.getPendingReply(message.Chat.ID)
+	if !ok {
+		return false
+	}
+
+	if message.ReplyToMessage == nil {
+		return false
+	}
+
+	b.clearPendingReply(message.Chat.ID)
+	b.handleCommand(message.Chat.ID, fmt.Sprintf("%s %s", command, strings.TrimSpace(message.Text)))
+	return true
+}
+
+func (b *Bot) requestCommandArgument(chatID int64, command string, prompt string) {
+	b.setPendingReply(chatID, command)
+	msg := tgbotapi.NewMessage(chatID, prompt)
+	msg.ReplyMarkup = tgbotapi.ForceReply{ForceReply: true}
+	if err := b.sendChattable(msg); err != nil {
+		_ = b.sendMessage(chatID, "❌ 发送参数输入提示失败")
+	}
+}
+
 // handleSetThreshold 处理设置阈值指令
 func (b *Bot) handleSetThreshold(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/threshold", "请回复 /threshold 的参数值，例如 0.03")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /threshold [数值] 格式")
 		return
@@ -155,6 +254,10 @@ func (b *Bot) handleSetThreshold(chatID int64, text string) {
 // handleSetReserve 处理设置保留金额指令
 func (b *Bot) handleSetReserve(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/reserve", "请回复 /reserve 的参数值，例如 100")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /reserve [数值] 格式")
 		return
@@ -173,6 +276,10 @@ func (b *Bot) handleSetReserve(chatID int64, text string) {
 // handleSetOrderLimit 处理设置订单限制指令
 func (b *Bot) handleSetOrderLimit(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/orderlimit", "请回复 /orderlimit 的参数值，例如 3")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /orderlimit [数值] 格式")
 		return
@@ -191,6 +298,10 @@ func (b *Bot) handleSetOrderLimit(chatID int64, text string) {
 // handleSetLoanDays 处理设置固定借贷天数指令
 func (b *Bot) handleSetLoanDays(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/loandays", "请回复 /loandays 的参数值，例如 30（或 0 表示自动）")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /loandays [数值] 格式\n提示: 设置为 0 表示自动判断")
 		return
@@ -219,6 +330,10 @@ func (b *Bot) handleSetLoanDays(chatID int64, text string) {
 // handleSetMinDailyRate 处理设置最低日利率指令
 func (b *Bot) handleSetMinDailyRate(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/mindailylendrate", "请回复 /mindailylendrate 的参数值，例如 0.03 或 FRR")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /mindailylendrate [数值|FRR] 格式")
 		return
@@ -249,6 +364,10 @@ func (b *Bot) handleSetMinDailyRate(chatID int64, text string) {
 // handleSetMinLoan 处理设置最小贷出金额指令
 func (b *Bot) handleSetMinLoan(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/minloan", "请回复 /minloan 的参数值，例如 150")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /minloan [数值] 格式")
 		return
@@ -273,6 +392,10 @@ func (b *Bot) handleSetMinLoan(chatID int64, text string) {
 // handleSetMaxLoan 处理设置最大贷出金额指令
 func (b *Bot) handleSetMaxLoan(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/maxloan", "请回复 /maxloan 的参数值，例如 500（或 0 表示无限制）")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /maxloan [数值] 格式\n提示: 设置为 0 表示无限制")
 		return
@@ -302,6 +425,10 @@ func (b *Bot) handleSetMaxLoan(chatID int64, text string) {
 // handleSetHighHoldRate 处理设置高额持有利率指令
 func (b *Bot) handleSetHighHoldRate(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/highholdrate", "请回复 /highholdrate 的参数值，例如 0.05")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /highholdrate [数值] 格式")
 		return
@@ -325,6 +452,10 @@ func (b *Bot) handleSetHighHoldRate(chatID int64, text string) {
 // handleSetHighHoldAmount 处理设置高额持有金额指令
 func (b *Bot) handleSetHighHoldAmount(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/highholdamount", "请回复 /highholdamount 的参数值，例如 1000（或 0 关闭）")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /highholdamount [数值] 格式\n提示: 设置为 0 可关闭高额持有策略")
 		return
@@ -348,6 +479,10 @@ func (b *Bot) handleSetHighHoldAmount(chatID int64, text string) {
 // handleSetHighHoldOrders 处理设置高额持有订单数量指令
 func (b *Bot) handleSetHighHoldOrders(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/highholdorders", "请回复 /highholdorders 的参数值，例如 3")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /highholdorders [数值] 格式")
 		return
@@ -366,6 +501,10 @@ func (b *Bot) handleSetHighHoldOrders(chatID int64, text string) {
 // handleSetRateRangeIncrease 处理设置利率范围增加百分比指令
 func (b *Bot) handleSetRateRangeIncrease(chatID int64, text string) {
 	parts := strings.Split(text, " ")
+	if len(parts) == 1 {
+		b.requestCommandArgument(chatID, "/raterangeincrease", "请回复 /raterangeincrease 的参数值，例如 10")
+		return
+	}
 	if len(parts) != 2 {
 		b.sendMessage(chatID, "格式错误，请使用 /raterangeincrease [数值] 格式")
 		return
@@ -392,21 +531,149 @@ func (b *Bot) handleSetRateRangeIncrease(chatID int64, text string) {
 
 // handleRestart 处理重启指令
 func (b *Bot) handleRestart(chatID int64) {
-	b.sendMessage(chatID, "🔄 开始手动重启...")
-
 	if b.restartCallback == nil {
 		b.sendMessage(chatID, "❌ 重启功能未初始化，请联系管理员")
 		return
 	}
 
-	// 执行重启逻辑
-	err := b.restartCallback()
+	b.sendDangerousActionConfirmation(
+		chatID,
+		"确认重跑",
+		"⚠️ 将取消程序追踪的未成交订单，并重新执行策略。\n\n是否继续？",
+		"confirm:restart",
+		"cancel:restart",
+	)
+}
+
+// handleRun 处理保留未成交订单直接重跑指令
+func (b *Bot) handleRun(chatID int64) {
+	b.sendMessage(chatID, "🔄 开始重新执行策略，将保留现有未成交订单...")
+
+	if b.runCallback == nil {
+		b.sendMessage(chatID, "❌ 直接重跑功能未初始化，请联系管理员")
+		return
+	}
+
+	err := b.runCallback()
 	if err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("❌ 直接重跑失败: %v", err))
+		return
+	}
+
+	b.sendMessage(chatID, "✅ 重跑完成！已保留现有未成交订单，并继续按策略执行")
+}
+
+// handleCancelPendingOffers 处理取消未成交订单指令
+func (b *Bot) handleCancelPendingOffers(chatID int64, text string) {
+	if b.lendingBot == nil {
+		b.sendMessage(chatID, "❌ 借贷机器人未初始化")
+		return
+	}
+
+	parts := strings.Fields(text)
+	includeAll := false
+	if len(parts) > 2 || (len(parts) == 2 && !strings.EqualFold(parts[1], "all")) {
+		b.sendMessage(chatID, "格式错误，请使用 /canceloffers 或 /canceloffers all")
+		return
+	}
+	if len(parts) == 2 {
+		includeAll = true
+	}
+
+	title := "确认取消"
+	message := "⚠️ 将取消程序追踪的未成交订单。\n\n是否继续？"
+	confirmData := "confirm:canceloffers:tracked"
+	cancelData := "cancel:canceloffers:tracked"
+	if includeAll {
+		title = "确认取消全部"
+		message = "⚠️ 将取消全部未成交订单，包括手动挂单。\n\n是否继续？"
+		confirmData = "confirm:canceloffers:all"
+		cancelData = "cancel:canceloffers:all"
+	}
+
+	b.sendDangerousActionConfirmation(chatID, title, message, confirmData, cancelData)
+}
+
+func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
+	if query == nil {
+		return
+	}
+
+	switch query.Data {
+	case "confirm:restart":
+		_ = b.answerCallback(tgbotapi.NewCallbackWithAlert(query.ID, "已确认，开始执行重跑"))
+		if query.Message != nil {
+			b.handleConfirmedRestart(query.Message.Chat.ID)
+		}
+	case "confirm:canceloffers:tracked":
+		_ = b.answerCallback(tgbotapi.NewCallbackWithAlert(query.ID, "已确认，开始取消程序追踪订单"))
+		if query.Message != nil {
+			b.executeConfirmedCancelOffers(query.Message.Chat.ID, false)
+		}
+	case "confirm:canceloffers:all":
+		_ = b.answerCallback(tgbotapi.NewCallbackWithAlert(query.ID, "已确认，开始取消全部未成交订单"))
+		if query.Message != nil {
+			b.executeConfirmedCancelOffers(query.Message.Chat.ID, true)
+		}
+	case "cancel:restart", "cancel:canceloffers:tracked", "cancel:canceloffers:all":
+		_ = b.answerCallback(tgbotapi.NewCallbackWithAlert(query.ID, "操作已取消"))
+	default:
+		_ = b.answerCallback(tgbotapi.NewCallback(query.ID, "未知操作"))
+	}
+}
+
+func (b *Bot) sendDangerousActionConfirmation(chatID int64, title string, text string, confirmData string, cancelData string) {
+	msg := tgbotapi.NewMessage(chatID, fmt.Sprintf("🔐 %s\n\n%s", title, text))
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("确认执行", confirmData),
+			tgbotapi.NewInlineKeyboardButtonData("取消", cancelData),
+		),
+	)
+
+	if err := b.sendChattable(msg); err != nil {
+		_ = b.sendMessage(chatID, "❌ 发送确认消息失败")
+	}
+}
+
+func (b *Bot) handleConfirmedRestart(chatID int64) {
+	if b.restartCallback == nil {
+		b.sendMessage(chatID, "❌ 重启功能未初始化，请联系管理员")
+		return
+	}
+
+	if err := b.restartCallback(); err != nil {
 		b.sendMessage(chatID, fmt.Sprintf("❌ 重启失败: %v", err))
 		return
 	}
 
-	b.sendMessage(chatID, "✅ 重启完成！所有订单已清除并重新下单")
+	b.sendMessage(chatID, "✅ 重跑完成！程序追踪的未成交订单已取消，并已重新执行策略")
+}
+
+func (b *Bot) executeConfirmedCancelOffers(chatID int64, includeAll bool) {
+	if b.lendingBot == nil {
+		b.sendMessage(chatID, "❌ 借贷机器人未初始化")
+		return
+	}
+
+	summary, err := b.lendingBot.CancelPendingFundingOffers(includeAll)
+	if err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("❌ 取消未成交订单失败: %v", err))
+		return
+	}
+
+	scopeText := "取消程序追踪的未成交订单"
+	if includeAll {
+		scopeText = "取消全部未成交订单"
+	}
+
+	message := fmt.Sprintf("✅ %s完成\n\n", scopeText)
+	message += fmt.Sprintf("总订单数: %d\n", summary.Total)
+	message += fmt.Sprintf("已取消: %d\n", summary.Cancelled)
+	message += fmt.Sprintf("已跳过: %d\n", summary.Skipped)
+	message += fmt.Sprintf("失败: %d", summary.Failed)
+
+	b.sendMessage(chatID, message)
 }
 
 // handleStrategyStatus 处理策略状态查询指令

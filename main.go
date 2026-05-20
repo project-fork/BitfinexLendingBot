@@ -22,14 +22,14 @@ import (
 
 // Application 应用程序主结构
 type Application struct {
-	config        *config.Config
-	bfxClient     *bitfinex.Client
-	telegramBot   *telegram.Bot
-	lendingBot    *strategy.LendingBot
-	rateConverter *rates.Converter
-	mainLogger    *log.Logger
-	lendingLogger *log.Logger
-	hourlyLogger  *log.Logger
+	config         *config.Config
+	bfxClient      *bitfinex.Client
+	telegramBot    *telegram.Bot
+	lendingBot     *strategy.LendingBot
+	rateConverter  *rates.Converter
+	mainLogger     *log.Logger
+	lendingLogger  *log.Logger
+	hourlyLogger   *log.Logger
 	telegramLogger *log.Logger
 
 	// 并发控制
@@ -70,24 +70,25 @@ func NewApplication(configPath string) (*Application, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	app := &Application{
-		config:        cfg,
-		bfxClient:     bfxClient,
-		telegramBot:   telegramBot,
-		lendingBot:    lendingBot,
-		rateConverter: rateConverter,
-		mainLogger:    newPrefixedLogger("MainTask", os.Stderr),
-		lendingLogger: newPrefixedLogger("LendingCheck", os.Stderr),
-		hourlyLogger:  newPrefixedLogger("HourlyRateCheck", os.Stderr),
+		config:         cfg,
+		bfxClient:      bfxClient,
+		telegramBot:    telegramBot,
+		lendingBot:     lendingBot,
+		rateConverter:  rateConverter,
+		mainLogger:     newPrefixedLogger("MainTask", os.Stderr),
+		lendingLogger:  newPrefixedLogger("LendingCheck", os.Stderr),
+		hourlyLogger:   newPrefixedLogger("HourlyRateCheck", os.Stderr),
 		telegramLogger: newPrefixedLogger("TelegramBot", os.Stderr),
-		ctx:           ctx,
-		cancel:        cancel,
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 
 	telegramBot.SetLogger(app.telegramLogger)
 	lendingBot.SetLogger(app.mainLogger)
 
-	// 设置 Telegram bot 重启回调
+	// 设置 Telegram bot 控制回调
 	telegramBot.SetRestartCallback(app.handleRestart)
+	telegramBot.SetRunCallback(app.handleRun)
 
 	// 设置借贷机器人的通知回调
 	lendingBot.SetNotifyCallback(telegramBot.SendNotification)
@@ -318,7 +319,7 @@ func (app *Application) scheduleHourlyRateCheck() {
 		// 使用 context 支持的 sleep
 		select {
 		case <-app.ctx.Done():
-				app.hourlyLogger.Println("利率检查调度器在等待中收到停止信号")
+			app.hourlyLogger.Println("利率检查调度器在等待中收到停止信号")
 			return
 		case <-time.After(delay):
 			app.checkRateThreshold()
@@ -356,11 +357,52 @@ func (app *Application) checkRateThreshold() {
 func (app *Application) handleRestart() error {
 	log.Println("收到重启请求，开始执行重启逻辑...")
 
-	// 执行主要任务（这会取消所有订单并重新下单）
-	app.executeMainTask("Telegram /restart 手动触发")
+	// 执行主要任务（先取消程序追踪到的未成交订单）
+	app.executeMainTaskWithCancel("Telegram /restart 手动触发")
 
 	log.Println("重启完成！")
 	return nil
+}
+
+// handleRun 处理保留未成交订单直接重跑请求
+func (app *Application) handleRun() error {
+	log.Println("收到直接重跑请求，开始执行重跑逻辑...")
+
+	app.executeMainTask("Telegram /run 手动触发")
+
+	log.Println("直接重跑完成！")
+	return nil
+}
+
+func (app *Application) executeMainTaskWithCancel(trigger string) {
+	app.mainTaskMu.Lock()
+	app.mainTaskRunCount++
+	runID := app.mainTaskRunCount
+	app.mainTaskRunning = true
+	app.mainTaskMu.Unlock()
+	defer func() {
+		app.mainTaskMu.Lock()
+		app.mainTaskRunning = false
+		app.mainTaskMu.Unlock()
+	}()
+
+	app.mainLogger.Println("============================================================")
+	app.mainLogger.Printf("🔁 开始重跑主策略 #%d", runID)
+	app.mainLogger.Printf("📍 触发来源: %s", trigger)
+	app.mainLogger.Printf("🕒 触发时间: %s", time.Now().Format("2006-01-02 15:04:05"))
+	app.mainLogger.Println("============================================================")
+
+	if err := app.lendingBot.ExecuteWithOfferCancellation(); err != nil {
+		app.mainLogger.Printf("❌ 主策略 #%d 执行失败（触发来源: %s）: %v", runID, trigger, err)
+		app.mainLogger.Println("============================================================")
+		app.mainLogger.Printf("🔚 结束主策略 #%d（失败）", runID)
+		app.mainLogger.Println("============================================================")
+		return
+	}
+
+	app.mainLogger.Println("============================================================")
+	app.mainLogger.Printf("✅ 结束主策略 #%d（成功）", runID)
+	app.mainLogger.Println("============================================================")
 }
 
 // scheduleLendingCheck 调度借贷订单检查
@@ -374,7 +416,7 @@ func (app *Application) scheduleLendingCheck() {
 	for {
 		select {
 		case <-app.ctx.Done():
-	log.Println("借贷检查调度器收到停止信号")
+			log.Println("借贷检查调度器收到停止信号")
 			return
 		case <-ticker.C:
 			app.executeLendingCheck()
