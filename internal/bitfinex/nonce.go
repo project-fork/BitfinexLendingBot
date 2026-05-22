@@ -10,6 +10,7 @@ import (
 )
 
 const nonceStateFileName = "nonce_state.json"
+const maxFutureNonceSeconds = int64(24 * 60 * 60)
 
 type nonceState struct {
 	LastNonce uint64 `json:"last_nonce"`
@@ -24,7 +25,7 @@ type persistentNonceGenerator struct {
 func newPersistentNonceGenerator(statePath string) (*persistentNonceGenerator, error) {
 	gen := &persistentNonceGenerator{
 		path:      statePath,
-		lastNonce: uint64(time.Now().UnixNano()),
+		lastNonce: currentEpochMicroNonce(),
 	}
 
 	if err := gen.load(); err != nil {
@@ -46,7 +47,7 @@ func (g *persistentNonceGenerator) GetNonce() string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	current := uint64(time.Now().UnixNano())
+	current := currentEpochMicroNonce()
 	if current <= g.lastNonce {
 		current = g.lastNonce + 1
 	}
@@ -68,7 +69,8 @@ func (g *persistentNonceGenerator) load() error {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil
 	}
-	if state.LastNonce > g.lastNonce {
+
+	if isReasonableMicroEpochNonce(state.LastNonce) && state.LastNonce > g.lastNonce {
 		g.lastNonce = state.LastNonce
 	}
 	return nil
@@ -94,4 +96,18 @@ func (g *persistentNonceGenerator) saveLocked() {
 		return
 	}
 	_ = os.Rename(tmpPath, g.path)
+}
+
+func currentEpochMicroNonce() uint64 {
+	return uint64(time.Now().Unix()) * 1_000_000
+}
+
+func isReasonableMicroEpochNonce(v uint64) bool {
+	if v == 0 {
+		return false
+	}
+
+	nowMicro := currentEpochMicroNonce()
+	maxFutureMicro := uint64(time.Now().Add(time.Duration(maxFutureNonceSeconds) * time.Second).Unix()) * 1_000_000
+	return v >= nowMicro/100 && v <= maxFutureMicro
 }
