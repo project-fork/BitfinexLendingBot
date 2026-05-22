@@ -1,13 +1,13 @@
 # BitfinexLendingBot 绿叶放贷机器人
 
-自动化的 Bitfinex 放贷机器人，支持传统策略、智能策略、K 线策略、FRR 挂单模式、Telegram 控制与借贷通知。
+自动化的 Bitfinex 放贷机器人，支持传统策略、简单策略、智能策略、K 线策略、FRR 挂单模式、Telegram 控制与借贷通知。
 
 目前版本：`v2.1.0`
 
 ## ✨ 主要功能
 
 - 🔄 **自动放贷**：依市场状况自动建立放贷订单
-- 🎯 **多策略切换**：支持传统策略、智能策略、K 线策略
+- 🎯 **多策略切换**：支持传统策略、简单策略、智能策略、K 线策略
 - ⚡ **触发式执行**：可改为只在新借贷成交或可用余额显着变化时重跑策略
 - 📈 **FRR 挂单模式**：`MIN_DAILY_LEND_RATE` 可设为 `FRR`
 - 🛡️ **订单追踪保护**：只取消程序追踪到的挂单，避免误取消手动建立的订单
@@ -95,12 +95,15 @@ HIGH_HOLD_ORDERS: 1
 ### 🧠 智能策略
 
 ```yaml
+ENABLE_SIMPLE_STRATEGY: false
 ENABLE_SMART_STRATEGY: true
 VOLATILITY_THRESHOLD: 0.002
 MAX_RATE_MULTIPLIER: 2.0
 MIN_RATE_MULTIPLIER: 0.8
 RATE_RANGE_INCREASE_PERCENT: 0.2
 ```
+
+`ENABLE_SIMPLE_STRATEGY` 会启用“高额持有优先 + 剩余资金补单”的执行兼容策略；`ENABLE_SMART_STRATEGY` 则恢复为以资金配比为核心的自适应智能策略。
 
 ### 📊 K 线策略
 
@@ -125,8 +128,9 @@ NOTIFY_RATE_THRESHOLD: 0.1
 ### 策略优先级
 
 1. **K 线策略**
-2. **智能策略**
-3. **传统策略**
+2. **简单策略**
+3. **智能策略**
+4. **传统策略**
 
 ### 定时模式
 
@@ -188,6 +192,7 @@ NOTIFY_RATE_THRESHOLD: 0.1
 
 ```text
 /klinestrategy on/off              - 切换 K 线策略
+/simplestrategy on/off             - 切换简单策略
 /smartstrategy on/off              - 切换智能策略
 ```
 

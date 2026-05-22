@@ -55,6 +55,7 @@ type Config struct {
 	NotificationFormat  string  `mapstructure:"NOTIFICATION_FORMAT"`
 
 	// 智能策略设定
+	EnableSimpleStrategy     bool    `mapstructure:"ENABLE_SIMPLE_STRATEGY"`
 	EnableSmartStrategy      bool    `mapstructure:"ENABLE_SMART_STRATEGY"`
 	VolatilityThreshold      float64 `mapstructure:"VOLATILITY_THRESHOLD"`
 	MaxRateMultiplier        float64 `mapstructure:"MAX_RATE_MULTIPLIER"`
@@ -150,7 +151,7 @@ func (c *Config) Validate() error {
 	}
 
 	// 验证智能策略参数
-	if c.EnableSmartStrategy {
+	if c.EnableSmartStrategy || c.EnableSimpleStrategy {
 		if c.VolatilityThreshold <= 0 || c.VolatilityThreshold > 0.01 {
 			return errors.NewValidationError("VOLATILITY_THRESHOLD must be between 0 and 0.01")
 		}
@@ -326,40 +327,20 @@ func (c *Config) GetLoanPeriod(fallback int) int {
 
 // setSmartStrategyDefaults 设置智能策略参数的默认值
 func (c *Config) setSmartStrategyDefaults() {
-	// 如果智能策略启用但参数为零，设置建议的默认值
-	if c.EnableSmartStrategy {
-		if c.VolatilityThreshold == 0 {
-			c.VolatilityThreshold = constants.DefaultVolatilityThreshold
-		}
-		if c.MaxRateMultiplier == 0 {
-			c.MaxRateMultiplier = constants.DefaultMaxRateMultiplier
-		}
-		if c.MinRateMultiplier == 0 {
-			c.MinRateMultiplier = constants.DefaultMinRateMultiplier
-		}
-		if c.RateRangeIncreasePercent == 0 {
-			c.RateRangeIncreasePercent = constants.RateRangeIncreasePercent
-		}
-		if c.FundingBookRateUndercut == 0 {
-			c.FundingBookRateUndercut = constants.DefaultFundingBookRateUndercut
-		}
-	} else {
-		// 如果智能策略未启用，确保参数有默认值以防止验证错误
-		if c.VolatilityThreshold == 0 {
-			c.VolatilityThreshold = constants.DefaultVolatilityThreshold
-		}
-		if c.MaxRateMultiplier == 0 {
-			c.MaxRateMultiplier = constants.DefaultMaxRateMultiplier
-		}
-		if c.MinRateMultiplier == 0 {
-			c.MinRateMultiplier = constants.DefaultMinRateMultiplier
-		}
-		if c.RateRangeIncreasePercent == 0 {
-			c.RateRangeIncreasePercent = constants.RateRangeIncreasePercent
-		}
-		if c.FundingBookRateUndercut == 0 {
-			c.FundingBookRateUndercut = constants.DefaultFundingBookRateUndercut
-		}
+	if c.VolatilityThreshold == 0 {
+		c.VolatilityThreshold = constants.DefaultVolatilityThreshold
+	}
+	if c.MaxRateMultiplier == 0 {
+		c.MaxRateMultiplier = constants.DefaultMaxRateMultiplier
+	}
+	if c.MinRateMultiplier == 0 {
+		c.MinRateMultiplier = constants.DefaultMinRateMultiplier
+	}
+	if c.RateRangeIncreasePercent == 0 {
+		c.RateRangeIncreasePercent = constants.RateRangeIncreasePercent
+	}
+	if c.FundingBookRateUndercut == 0 {
+		c.FundingBookRateUndercut = constants.DefaultFundingBookRateUndercut
 	}
 }
 

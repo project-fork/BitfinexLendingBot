@@ -21,6 +21,7 @@ type LendingBot struct {
 	config         *config.Config
 	client         fundingClient
 	rateConverter  *rates.Converter
+	simpleStrategy *SimpleStrategy
 	smartStrategy  *SmartStrategy
 	orderTracker   *tracker.BotOrderTracker
 	notifyCallback func(string) error // Telegram 通知回调函数
@@ -45,12 +46,13 @@ type fundingClient interface {
 // NewLendingBot 创建新的贷出机器人
 func NewLendingBot(cfg *config.Config, client *bitfinex.Client) *LendingBot {
 	return &LendingBot{
-		config:        cfg,
-		client:        client,
-		rateConverter: rates.NewConverter(),
-		orderTracker:  tracker.NewBotOrderTracker(),
-		smartStrategy: NewSmartStrategy(cfg),
-		logger:        log.New(os.Stderr, "", log.LstdFlags),
+		config:         cfg,
+		client:         client,
+		rateConverter:  rates.NewConverter(),
+		orderTracker:   tracker.NewBotOrderTracker(),
+		simpleStrategy: NewSimpleStrategy(cfg),
+		smartStrategy:  NewSmartStrategy(cfg),
+		logger:         log.New(os.Stderr, "", log.LstdFlags),
 	}
 }
 
@@ -60,12 +62,16 @@ func (lb *LendingBot) SetLogger(logger *log.Logger) {
 		return
 	}
 	lb.logger = logger
+	lb.simpleStrategy.SetLogger(logger)
 	lb.smartStrategy.SetLogger(logger)
 }
 
 func (lb *LendingBot) getLogger() *log.Logger {
 	if lb.logger == nil {
 		lb.logger = log.New(os.Stderr, "", log.LstdFlags)
+	}
+	if lb.simpleStrategy != nil {
+		lb.simpleStrategy.SetLogger(lb.logger)
 	}
 	if lb.smartStrategy != nil {
 		lb.smartStrategy.SetLogger(lb.logger)
@@ -156,6 +162,9 @@ func (lb *LendingBot) execute(cancelTrackedOffers bool) error {
 	if lb.config.EnableKlineStrategy {
 		logger.Println("使用K线策略计算贷出订单...")
 		loanOffers = lb.calculateKlineOffers(fundsAvailable)
+	} else if lb.config.EnableSimpleStrategy {
+		logger.Println("使用简单策略计算贷出订单...")
+		loanOffers = lb.simpleStrategy.CalculateOffers(fundsAvailable, fundingBook)
 	} else if lb.config.EnableSmartStrategy {
 		logger.Println("使用智能策略计算贷出订单...")
 		loanOffers = lb.smartStrategy.CalculateSmartOffers(fundsAvailable, fundingBook)

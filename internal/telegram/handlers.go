@@ -121,9 +121,12 @@ func (b *Bot) handleStatus(chatID int64) {
 		statusMsg += fmt.Sprintf("\n时间框架: %s", b.config.KlineTimeFrame)
 		statusMsg += fmt.Sprintf("\n周期数: %d", b.config.KlinePeriod)
 		statusMsg += fmt.Sprintf("\n加成: %.1f%%", b.config.KlineSpreadPercent)
+	} else if b.config.EnableSimpleStrategy {
+		statusMsg += fmt.Sprintf("\n简单策略 (启用)")
+		statusMsg += fmt.Sprintf("\n高额持有优先后按剩余资金补单")
 	} else if b.config.EnableSmartStrategy {
 		statusMsg += fmt.Sprintf("\n智能策略 (启用)")
-		statusMsg += fmt.Sprintf("\n利率范围增加: %.1f%%", b.config.RateRangeIncreasePercent*100)
+		statusMsg += fmt.Sprintf("\n自适应资金配比: 已启用")
 	} else {
 		statusMsg += fmt.Sprintf("\n传统策略 (启用)")
 	}
@@ -745,9 +748,12 @@ func (b *Bot) handleStrategyStatus(chatID int64) {
 	if b.config.EnableKlineStrategy {
 		strategyType = "K线策略 (启用)"
 		strategyPriority = "最高优先级"
+	} else if b.config.EnableSimpleStrategy {
+		strategyType = "简单策略 (启用)"
+		strategyPriority = "中等优先级"
 	} else if b.config.EnableSmartStrategy {
 		strategyType = "智能策略 (启用)"
-		strategyPriority = "中等优先级"
+		strategyPriority = "较低优先级"
 	} else {
 		strategyType = "传统策略 (启用)"
 		strategyPriority = "默认策略"
@@ -808,6 +814,19 @@ func (b *Bot) handleStrategyStatus(chatID int64) {
 		statusMsg += fmt.Sprintf("\n⚡ 短期: 15m-30m (快速反应)")
 		statusMsg += fmt.Sprintf("\n⚖️ 中期: 1h-3h (平衡策略)")
 		statusMsg += fmt.Sprintf("\n🛡️ 长期: 6h-1D (稳定策略)")
+	} else if b.config.EnableSimpleStrategy {
+		statusMsg += fmt.Sprintf("\n\n⚙️ 简单策略设定:")
+		statusMsg += fmt.Sprintf("\n高额持有优先: %.2f %s x %d",
+			b.config.HighHoldAmount, b.config.Currency, b.config.HighHoldOrders)
+		statusMsg += fmt.Sprintf("\n剩余资金补单: 最多 %d 笔", b.config.SpreadLend)
+		statusMsg += fmt.Sprintf("\n订单上限联动: %d", b.config.OrderLimit)
+		statusMsg += fmt.Sprintf("\nFunding Book 压价: %.6f%%", b.config.FundingBookRateUndercut)
+
+		statusMsg += fmt.Sprintf("\n\n简单策略特点:")
+		statusMsg += fmt.Sprintf("\n✅ 高额持有优先")
+		statusMsg += fmt.Sprintf("\n✅ 保留现有挂单时补单")
+		statusMsg += fmt.Sprintf("\n✅ OrderLimit 联动控笔数")
+		statusMsg += fmt.Sprintf("\n✅ 分散单支持 FRR")
 	} else if b.config.EnableSmartStrategy {
 		statusMsg += fmt.Sprintf("\n\n🧠 智能策略设定:")
 		statusMsg += fmt.Sprintf("\n波动率阈值: %.4f", b.config.VolatilityThreshold)
@@ -837,11 +856,13 @@ func (b *Bot) handleStrategyStatus(chatID int64) {
 	// 显示策略优先级顺序
 	statusMsg += fmt.Sprintf("\n\n🔄 策略优先级顺序:")
 	statusMsg += fmt.Sprintf("\n1️⃣ K线策略 (%s)", getStrategyStatus(b.config.EnableKlineStrategy))
-	statusMsg += fmt.Sprintf("\n2️⃣ 智能策略 (%s)", getStrategyStatus(b.config.EnableSmartStrategy))
-	statusMsg += fmt.Sprintf("\n3️⃣ 传统策略 (默认)")
+	statusMsg += fmt.Sprintf("\n2️⃣ 简单策略 (%s)", getStrategyStatus(b.config.EnableSimpleStrategy))
+	statusMsg += fmt.Sprintf("\n3️⃣ 智能策略 (%s)", getStrategyStatus(b.config.EnableSmartStrategy))
+	statusMsg += fmt.Sprintf("\n4️⃣ 传统策略 (默认)")
 
 	statusMsg += fmt.Sprintf("\n\n💡 提示: 使用指令切换策略")
 	statusMsg += fmt.Sprintf("\n/klinestrategy on/off - 切换K线策略")
+	statusMsg += fmt.Sprintf("\n/simplestrategy on/off - 切换简单策略")
 	statusMsg += fmt.Sprintf("\n/smartstrategy on/off - 切换智能策略")
 
 	b.sendMessage(chatID, statusMsg)
@@ -855,20 +876,48 @@ func getStrategyStatus(enabled bool) string {
 	return "停用"
 }
 
+// handleToggleSimpleStrategy 处理简单策略切换指令
+func (b *Bot) handleToggleSimpleStrategy(chatID int64, enable bool) {
+	b.config.EnableSimpleStrategy = enable
+
+	var message string
+	if enable {
+		b.config.EnableKlineStrategy = false
+		b.config.EnableSmartStrategy = false
+
+		message = "✅ 简单策略已启用\n\n简单策略特点:\n⚙️ 高额持有优先\n🔄 剩余资金补单\n📊 OrderLimit 联动控笔数\n📈 分散单支持 FRR\n\nK线策略与智能策略已自动停用\n下次执行时将使用简单策略"
+	} else {
+		message = "❌ 简单策略已停用\n\n已切换回其他策略:\n"
+		if b.config.EnableKlineStrategy {
+			message += "📈 K线策略 (已启用)\n"
+		} else if b.config.EnableSmartStrategy {
+			message += "🧠 智能策略 (已启用)\n"
+		} else {
+			message += "⚙️ 传统策略 (默认)\n"
+		}
+		message += "\n下次执行时将使用相应策略"
+	}
+
+	b.sendMessage(chatID, message)
+}
+
 // handleToggleSmartStrategy 处理智能策略切换指令
 func (b *Bot) handleToggleSmartStrategy(chatID int64, enable bool) {
 	b.config.EnableSmartStrategy = enable
 
 	var message string
 	if enable {
-		// 如果启用智能策略，自动关闭K线策略
+		// 如果启用智能策略，自动关闭K线策略与简单策略
 		b.config.EnableKlineStrategy = false
+		b.config.EnableSimpleStrategy = false
 
-		message = "✅ 智能策略已启用\n\n智能功能:\n🧠 动态利率调整\n📈 市场趋势分析\n⏰ 智能期间选择\n🏆 竞争对手分析\n💰 自适应资金配置\n\nK线策略已自动停用\n下次执行时将使用智能策略"
+		message = "✅ 智能策略已启用\n\n智能功能:\n🧠 动态利率调整\n📈 市场趋势分析\n⏰ 智能期间选择\n🏆 竞争对手分析\n💰 自适应资金配置\n\nK线策略与简单策略已自动停用\n下次执行时将使用智能策略"
 	} else {
 		message = "❌ 智能策略已停用\n\n已切换回其他策略:\n"
 		if b.config.EnableKlineStrategy {
 			message += "📈 K线策略 (已启用)\n"
+		} else if b.config.EnableSimpleStrategy {
+			message += "⚙️ 简单策略 (已启用)\n"
 		} else {
 			message += "⚙️ 传统策略 (默认)\n"
 		}
@@ -884,7 +933,8 @@ func (b *Bot) handleToggleKlineStrategy(chatID int64, enable bool) {
 
 	var message string
 	if enable {
-		// 如果启用K线策略，自动关闭智能策略
+		// 如果启用K线策略，自动关闭简单策略与智能策略
+		b.config.EnableSimpleStrategy = false
 		b.config.EnableSmartStrategy = false
 
 		message = "✅ K线策略已启用\n\n📈 K线策略功能:\n🎯 基于真实市场K线数据\n📊 自动找寻最高利率\n💡 智能加成计算\n🔄 分散风险贷出\n🛡️ 自动回退机制\n\n"
@@ -892,10 +942,12 @@ func (b *Bot) handleToggleKlineStrategy(chatID int64, enable bool) {
 		message += fmt.Sprintf("时间框架: %s\n", b.config.KlineTimeFrame)
 		message += fmt.Sprintf("K线周期: %d\n", b.config.KlinePeriod)
 		message += fmt.Sprintf("加成百分比: %.1f%%\n", b.config.KlineSpreadPercent)
-		message += "\n智能策略已自动停用\n下次执行时将使用K线策略"
+		message += "\n简单策略与智能策略已自动停用\n下次执行时将使用K线策略"
 	} else {
 		message = "❌ K线策略已停用\n\n已切换回其他策略:\n"
-		if b.config.EnableSmartStrategy {
+		if b.config.EnableSimpleStrategy {
+			message += "⚙️ 简单策略 (已启用)\n"
+		} else if b.config.EnableSmartStrategy {
 			message += "🧠 智能策略 (已启用)\n"
 		} else {
 			message += "⚙️ 传统策略 (默认)\n"

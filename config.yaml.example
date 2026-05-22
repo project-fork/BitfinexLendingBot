@@ -30,7 +30,8 @@ NOTIFY_RATE_THRESHOLD: 0.045
 RESERVE_AMOUNT: 0
 NOTIFICATION_FORMAT: "classic" # classic 为现有纯文本格式，aligned 为 <pre> 对齐格式
 
-ENABLE_SMART_STRATEGY: true # 启用智能策略
+ENABLE_SIMPLE_STRATEGY: false # 启用简单策略（高额持有优先 + 剩余补单）
+ENABLE_SMART_STRATEGY: true # 启用智能策略（自适应资金配比）
 VOLATILITY_THRESHOLD: 0.002      # 高波动阈值（默认: 0.002）
 MAX_RATE_MULTIPLIER: 2.0         # 最大利率倍数（默认: 2.0）
 MIN_RATE_MULTIPLIER: 0.8         # 最小利率倍数（默认: 0.8）
