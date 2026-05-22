@@ -100,6 +100,38 @@ func TestHandlePendingOffers_ShowsTrackedAndManualCounts(t *testing.T) {
 	}
 }
 
+func TestHandlePendingOffers_UsesAlignedFormatWhenConfigured(t *testing.T) {
+	lb := &stubLendingBot{
+		pendingOffers: []*bitfinex.PendingFundingOffer{
+			{
+				FundingOffer: bitfinex.FundingOffer{ID: 101, Amount: 434.62, Rate: 0.00039, Period: 120},
+				IsTracked:    false,
+			},
+		},
+	}
+	bot, messages, _ := newTestBotWithMessages(lb)
+	bot.config.NotificationFormat = "aligned"
+
+	bot.handlePendingOffers(1)
+
+	if len(*messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(*messages))
+	}
+	message := (*messages)[0]
+	expectedFragments := []string{
+		"<pre>金额　：$434.62",
+		"日利率：0.0390%",
+		"期间　：120 天",
+		"类型　：手动挂单",
+		"总金额　：$434.62",
+	}
+	for _, fragment := range expectedFragments {
+		if !strings.Contains(message, fragment) {
+			t.Fatalf("expected aligned message to contain %q, got:\n%s", fragment, message)
+		}
+	}
+}
+
 func TestHandlePendingOffers_ReportsError(t *testing.T) {
 	lb := &stubLendingBot{pendingOffersErr: errors.New("boom")}
 	bot, messages, _ := newTestBotWithMessages(lb)

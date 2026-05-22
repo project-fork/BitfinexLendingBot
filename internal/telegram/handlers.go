@@ -8,7 +8,9 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api"
 
+	"github.com/kfrico/BitfinexLendingBot/internal/bitfinex"
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
+	"github.com/kfrico/BitfinexLendingBot/internal/formatting"
 )
 
 // handleRate 处理利率查询指令
@@ -154,6 +156,11 @@ func (b *Bot) handlePendingOffers(chatID int64) {
 		return
 	}
 
+	if strings.EqualFold(b.config.NotificationFormat, "aligned") {
+		b.sendMessage(chatID, b.buildAlignedPendingOffersMessage(offers))
+		return
+	}
+
 	message := "📭 当前未成交订单\n\n"
 	totalAmount := 0.0
 	trackedCount := 0
@@ -199,6 +206,59 @@ func (b *Bot) handlePendingOffers(chatID int64) {
 	message += fmt.Sprintf("手动挂单: %d", manualCount)
 
 	b.sendMessage(chatID, message)
+}
+
+func (b *Bot) buildAlignedPendingOffersMessage(offers []*bitfinex.PendingFundingOffer) string {
+	message := "📭 当前未成交订单\n\n"
+	totalAmount := 0.0
+	trackedCount := 0
+
+	displayCount := len(offers)
+	if displayCount > 10 {
+		displayCount = 10
+	}
+
+	for i := 0; i < displayCount; i++ {
+		offer := offers[i]
+		totalAmount += offer.Amount
+
+		orderType := "手动挂单"
+		if offer.IsTracked {
+			orderType = "程序追踪"
+			trackedCount++
+		}
+
+		message += fmt.Sprintf("📊 订单 #%d (ID: %d)\n", i+1, offer.ID)
+		message += formatting.BuildAlignedBlock([][2]string{
+			{"金额", formatting.FormatCurrency(offer.Amount, b.config.Currency, b.config.NotificationFormat)},
+			{"日利率", fmt.Sprintf("%.4f%%", b.rateConverter.DecimalToPercentage(offer.Rate))},
+			{"期间", fmt.Sprintf("%d 天", offer.Period)},
+			{"类型", orderType},
+		})
+		message += "\n\n"
+	}
+
+	for i := displayCount; i < len(offers); i++ {
+		totalAmount += offers[i].Amount
+		if offers[i].IsTracked {
+			trackedCount++
+		}
+	}
+
+	manualCount := len(offers) - trackedCount
+	if len(offers) > 10 {
+		message += fmt.Sprintf("... 还有 %d 个订单未显示\n\n", len(offers)-10)
+	}
+
+	message += "📊 统计信息\n"
+	message += formatting.BuildAlignedBlock([][2]string{
+		{"总订单数", fmt.Sprintf("%d", len(offers))},
+		{"总金额", formatting.FormatCurrency(totalAmount, b.config.Currency, b.config.NotificationFormat)},
+		{"程序追踪", fmt.Sprintf("%d", trackedCount)},
+		{"手动挂单", fmt.Sprintf("%d", manualCount)},
+	})
+
+	return message
 }
 
 func (b *Bot) handlePendingReply(message *tgbotapi.Message) bool {

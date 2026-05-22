@@ -11,6 +11,7 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/bitfinex"
 	"github.com/kfrico/BitfinexLendingBot/internal/config"
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
+	"github.com/kfrico/BitfinexLendingBot/internal/formatting"
 	"github.com/kfrico/BitfinexLendingBot/internal/rates"
 	"github.com/kfrico/BitfinexLendingBot/internal/tracker"
 )
@@ -801,6 +802,10 @@ func (lb *LendingBot) sendLendingNotification(credits []*bitfinex.FundingCredit)
 		return nil
 	}
 
+	if strings.EqualFold(lb.config.NotificationFormat, "aligned") {
+		return lb.sendAlignedLendingNotification("💰 新的借贷订单通知", credits, true)
+	}
+
 	message := "💰 新的借贷订单通知\n\n"
 
 	frrFallbackRate := 0.0
@@ -884,6 +889,10 @@ func (lb *LendingBot) sendReturnedLendingNotification(credits []*bitfinex.Fundin
 		return nil
 	}
 
+	if strings.EqualFold(lb.config.NotificationFormat, "aligned") {
+		return lb.sendAlignedLendingNotification("💸 贷出已结束/返还通知", credits, false)
+	}
+
 	message := "💸 贷出已结束/返还通知\n\n"
 	totalAmount := 0.0
 
@@ -926,6 +935,88 @@ func (lb *LendingBot) sendReturnedLendingNotification(credits []*bitfinex.Fundin
 	}
 
 	lb.getLogger().Println("贷出已结束/返还通知发送成功")
+	return nil
+}
+
+func (lb *LendingBot) sendAlignedLendingNotification(title string, credits []*bitfinex.FundingCredit, includeEarnings bool) error {
+	message := title + "\n\n"
+
+	frrFallbackRate := 0.0
+	for _, credit := range credits {
+		if credit != nil && credit.EffectiveDailyRate() == 0 {
+			rate, err := lb.client.GetCurrentFundingRate(lb.config.GetFundingSymbol())
+			if err != nil {
+				lb.getLogger().Printf("取得 FRR 利率失败: %v", err)
+				break
+			}
+			frrFallbackRate = rate
+			break
+		}
+	}
+
+	totalAmount := 0.0
+	totalEarnings := 0.0
+	detectionTime := time.Now().Format("2006-01-02 15:04:05")
+
+	for i, credit := range credits {
+		if credit == nil {
+			continue
+		}
+		if i >= constants.MaxDisplayOrders {
+			remaining := len(credits) - constants.MaxDisplayOrders
+			message += fmt.Sprintf("... 还有 %d 个订单\n", remaining)
+			break
+		}
+
+		effectiveRate := credit.EffectiveDailyRate()
+		if effectiveRate == 0 && frrFallbackRate > 0 {
+			effectiveRate = frrFallbackRate
+		}
+		periodEarnings := credit.Amount * effectiveRate * float64(credit.Period)
+		totalAmount += credit.Amount
+		totalEarnings += periodEarnings
+
+		rows := [][2]string{
+			{"金额", formatting.FormatCurrency(credit.Amount, lb.config.Currency, lb.config.NotificationFormat)},
+			{"日利率", fmt.Sprintf("%.4f%%", lb.rateConverter.DecimalToPercentage(effectiveRate))},
+			{"期间", fmt.Sprintf("%d 天", credit.Period)},
+		}
+		if includeEarnings {
+			rows = append(rows,
+				[2]string{"预期收益", formatting.FormatCurrency(periodEarnings, lb.config.Currency, lb.config.NotificationFormat)},
+				[2]string{"开始时间", time.Unix(credit.MTSOpened/1000, 0).Format("2006-01-02 15:04:05")},
+			)
+		} else {
+			rows = append(rows,
+				[2]string{"开始时间", time.Unix(credit.MTSOpened/1000, 0).Format("2006-01-02 15:04:05")},
+				[2]string{"检测时间", detectionTime},
+			)
+		}
+
+		message += fmt.Sprintf("📊 订单 #%d (ID: %d)\n", i+1, credit.ID)
+		message += formatting.BuildAlignedBlock(rows)
+		message += "\n\n"
+	}
+
+	summaryRows := [][2]string{
+		{"总订单数", fmt.Sprintf("%d", len(credits))},
+		{"总金额", formatting.FormatCurrency(totalAmount, lb.config.Currency, lb.config.NotificationFormat)},
+	}
+	if includeEarnings {
+		summaryRows = append(summaryRows, [2]string{"总预期收益", formatting.FormatCurrency(totalEarnings, lb.config.Currency, lb.config.NotificationFormat)})
+	}
+
+	message += "📊 统计信息\n"
+	message += formatting.BuildAlignedBlock(summaryRows)
+
+	if err := lb.notifyCallback(message); err != nil {
+		lb.getLogger().Printf("发送对齐格式通知失败: %v", err)
+		lb.getLogger().Println("对齐格式通知内容:")
+		lb.getLogger().Println(message)
+		return nil
+	}
+
+	lb.getLogger().Println("对齐格式通知发送成功")
 	return nil
 }
 

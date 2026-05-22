@@ -292,6 +292,9 @@ func (b *Bot) sendMessage(chatID int64, text string) error {
 		return b.sendMessageFunc(chatID, text)
 	}
 	msg := tgbotapi.NewMessage(chatID, text)
+	if strings.Contains(text, "<pre>") || strings.Contains(text, "<b>") || strings.Contains(text, "<i>") || strings.Contains(text, "<code>") {
+		msg.ParseMode = tgbotapi.ModeHTML
+	}
 	_, err := b.api.Send(msg)
 	return err
 }

@@ -52,6 +52,7 @@ type Config struct {
 	// 通知设定
 	NotifyRateThreshold float64 `mapstructure:"NOTIFY_RATE_THRESHOLD"`
 	ReserveAmount       float64 `mapstructure:"RESERVE_AMOUNT"`
+	NotificationFormat  string  `mapstructure:"NOTIFICATION_FORMAT"`
 
 	// 智能策略设定
 	EnableSmartStrategy      bool    `mapstructure:"ENABLE_SMART_STRATEGY"`
@@ -198,6 +199,9 @@ func (c *Config) Validate() error {
 	// 验证借贷检查间隔
 	if c.LendingCheckMinutes <= 0 {
 		return errors.NewValidationError("LENDING_CHECK_MINUTES must be positive")
+	}
+	if c.NotificationFormat != "" && c.NotificationFormat != "classic" && c.NotificationFormat != "aligned" {
+		return errors.NewValidationError("NOTIFICATION_FORMAT must be one of: classic, aligned")
 	}
 
 	return nil
@@ -383,5 +387,8 @@ func (c *Config) setLendingCheckDefaults() {
 	// 如果未设置借贷检查间隔，默认为 10 分钟
 	if c.LendingCheckMinutes == 0 {
 		c.LendingCheckMinutes = 10
+	}
+	if c.NotificationFormat == "" {
+		c.NotificationFormat = "classic"
 	}
 }

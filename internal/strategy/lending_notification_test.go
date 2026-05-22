@@ -229,3 +229,47 @@ func TestCheckNewLendingCredits_DoesNotSendReturnedNotificationOnInitialSnapshot
 		t.Fatalf("expected no notifications during initial snapshot, got %d (%v)", len(messages), messages)
 	}
 }
+
+func TestSendLendingNotification_UsesAlignedFormatAndDollarAmount(t *testing.T) {
+	bot := &LendingBot{
+		config: &config.Config{
+			Currency:           "usd",
+			NotificationFormat: "aligned",
+		},
+		client:        &stubNotificationFundingClient{},
+		rateConverter: rates.NewConverter(),
+		orderTracker:  tracker.NewBotOrderTracker(),
+		logger:        log.New(os.Stderr, "", log.LstdFlags),
+	}
+
+	var messages []string
+	bot.SetNotifyCallback(func(message string) error {
+		messages = append(messages, message)
+		return nil
+	})
+
+	err := bot.sendLendingNotification([]*bitfinex.FundingCredit{
+		{ID: 1001, Amount: 434.62, Rate: 0.00039, Period: 120, MTSOpened: 1700000000000},
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(messages))
+	}
+
+	message := messages[0]
+	expectedFragments := []string{
+		"<pre>金额　　：$434.62",
+		"日利率　：0.0390%",
+		"期间　　：120 天",
+		"预期收益：$20.34",
+		"总金额　　：$434.62",
+		"总预期收益：$20.34",
+	}
+	for _, fragment := range expectedFragments {
+		if !strings.Contains(message, fragment) {
+			t.Fatalf("expected message to contain %q, got:\n%s", fragment, message)
+		}
+	}
+}
