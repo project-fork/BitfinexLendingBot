@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -30,15 +31,12 @@ type Config struct {
 	LoanDays int     `mapstructure:"LOAN_DAYS"` // 固定借贷天数，0 代表依策略自动决定
 
 	// 利率策略
-	MinDailyLendRate              any     `mapstructure:"MIN_DAILY_LEND_RATE"` // 支持数值或 "FRR"
-	SpreadLend                    int     `mapstructure:"SPREAD_LEND"`         // 分散单最大目标笔数
-	GapBottom                     float64 `mapstructure:"GAP_BOTTOM"`
-	GapTop                        float64 `mapstructure:"GAP_TOP"`
-	ThirtyDayLendRateThreshold    float64 `mapstructure:"THIRTY_DAY_LEND_RATE_THRESHOLD"`
-	SixtyDayLendRateThreshold     float64 `mapstructure:"SIXTY_DAY_LEND_RATE_THRESHOLD"`
-	NinetyDayLendRateThreshold    float64 `mapstructure:"NINETY_DAY_LEND_RATE_THRESHOLD"`
-	OneTwentyDayLendRateThreshold float64 `mapstructure:"ONE_TWENTY_DAY_LEND_RATE_THRESHOLD"`
-	RateBonus                     float64 `mapstructure:"RATE_BONUS"`
+	MinDailyLendRate     any             `mapstructure:"MIN_DAILY_LEND_RATE"` // 支持数值或 "FRR"
+	SpreadLend           int             `mapstructure:"SPREAD_LEND"`         // 分散单最大目标笔数
+	GapBottom            float64         `mapstructure:"GAP_BOTTOM"`
+	GapTop               float64         `mapstructure:"GAP_TOP"`
+	LoanPeriodThresholds map[int]float64 `mapstructure:"LOAN_PERIOD_THRESHOLDS"` // key=天数, value=触发该天数的日利率阈值（百分比）
+	RateBonus            float64         `mapstructure:"RATE_BONUS"`
 
 	// 高额持有策略
 	HighHoldRate   float64 `mapstructure:"HIGH_HOLD_RATE"`
@@ -133,6 +131,14 @@ func (c *Config) Validate() error {
 	}
 	if c.LoanDays == 1 {
 		return errors.NewValidationError("LOAN_DAYS must be 0 or between 2 and 120")
+	}
+	for days, threshold := range c.LoanPeriodThresholds {
+		if days < 2 || days > constants.Period120Days {
+			return errors.NewValidationError("LOAN_PERIOD_THRESHOLDS keys must be between 2 and 120")
+		}
+		if threshold <= 0 {
+			return errors.NewValidationError("LOAN_PERIOD_THRESHOLDS values must be positive")
+		}
 	}
 	minDailyRate, useFRR, err := c.parseMinDailyLendRate()
 	if err != nil {
@@ -340,32 +346,38 @@ func (c *Config) GetHighHoldRateDecimal() float64 {
 	return c.HighHoldRate / constants.PercentageToDecimal
 }
 
-// GetThirtyDayThresholdDecimal 获取30天阈值（小数格式）
-func (c *Config) GetThirtyDayThresholdDecimal() float64 {
-	return c.ThirtyDayLendRateThreshold / constants.PercentageToDecimal
-}
-
-// GetSixtyDayThresholdDecimal 获取60天阈值（小数格式）
-func (c *Config) GetSixtyDayThresholdDecimal() float64 {
-	return c.SixtyDayLendRateThreshold / constants.PercentageToDecimal
-}
-
-// GetNinetyDayThresholdDecimal 获取90天阈值（小数格式）
-func (c *Config) GetNinetyDayThresholdDecimal() float64 {
-	return c.NinetyDayLendRateThreshold / constants.PercentageToDecimal
-}
-
-// GetOneTwentyDayThresholdDecimal 获取120天阈值（小数格式）
-func (c *Config) GetOneTwentyDayThresholdDecimal() float64 {
-	return c.OneTwentyDayLendRateThreshold / constants.PercentageToDecimal
-}
-
 // GetLoanPeriod 回传实际借贷天数；若未固定设定则回传 fallback。
 func (c *Config) GetLoanPeriod(fallback int) int {
 	if c.LoanDays > 0 {
 		return c.LoanDays
 	}
 	return fallback
+}
+
+type LoanPeriodThreshold struct {
+	Days             int
+	ThresholdPercent float64
+	ThresholdDecimal float64
+}
+
+func (c *Config) GetSortedLoanPeriodThresholdsDesc() []LoanPeriodThreshold {
+	result := make([]LoanPeriodThreshold, 0, len(c.LoanPeriodThresholds))
+	for days, threshold := range c.LoanPeriodThresholds {
+		if days < 2 || days > constants.Period120Days || threshold <= 0 {
+			continue
+		}
+		result = append(result, LoanPeriodThreshold{
+			Days:             days,
+			ThresholdPercent: threshold,
+			ThresholdDecimal: threshold / constants.PercentageToDecimal,
+		})
+	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Days > result[j].Days
+	})
+
+	return result
 }
 
 // setSmartStrategyDefaults 设置智能策略参数的默认值

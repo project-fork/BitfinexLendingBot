@@ -15,16 +15,18 @@ func TestCalculateSpreadOffers_LogsPricingDecision(t *testing.T) {
 	reader, writer := io.Pipe()
 	bot := &LendingBot{
 		config: &config.Config{
-			MinDailyLendRate:              0.03,
-			SpreadLend:                    6,
-			GapBottom:                     2,
-			GapTop:                        18,
-			MinLoan:                       150,
-			MaxLoan:                       2000,
-			ThirtyDayLendRateThreshold:    0.03,
-			SixtyDayLendRateThreshold:     0.035,
-			NinetyDayLendRateThreshold:    0.04,
-			OneTwentyDayLendRateThreshold: 0.045,
+			MinDailyLendRate: 0.03,
+			SpreadLend:       6,
+			GapBottom:        2,
+			GapTop:           18,
+			MinLoan:          150,
+			MaxLoan:          2000,
+			LoanPeriodThresholds: map[int]float64{
+				30:  0.03,
+				60:  0.035,
+				90:  0.04,
+				120: 0.045,
+			},
 		},
 		rateConverter: rates.NewConverter(),
 		logger:        log.New(writer, "", log.LstdFlags),
@@ -58,7 +60,7 @@ func TestCalculateSpreadOffers_LogsPricingDecision(t *testing.T) {
 		"分散策略 - 剩余资金",
 		"实际拆单数: 2",
 		"低于最低利率 0.030000%",
-		"期限决策 - 利率 0.030000% 达到 30天阈值 0.030000%",
+		"期限决策 - 利率 0.030000% 达到 30天阈值 0.030000%，使用 30 天",
 		"分散订单 #1",
 		"分散订单 #2",
 	}

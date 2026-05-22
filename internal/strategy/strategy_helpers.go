@@ -152,20 +152,12 @@ func calculateSmartPeriod(cfg *config.Config, dailyRate float64, condition *Mark
 		return cfg.LoanDays
 	}
 
-	oneTwentyThreshold := cfg.GetOneTwentyDayThresholdDecimal()
-	ninetyThreshold := cfg.GetNinetyDayThresholdDecimal()
-	sixtyThreshold := cfg.GetSixtyDayThresholdDecimal()
-	thirtyThreshold := cfg.GetThirtyDayThresholdDecimal()
-
 	basePeriod := constants.DefaultPeriodDays
-	if cfg.OneTwentyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, oneTwentyThreshold) {
-		basePeriod = constants.Period120Days
-	} else if cfg.NinetyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, ninetyThreshold) {
-		basePeriod = constants.Period90Days
-	} else if cfg.SixtyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, sixtyThreshold) {
-		basePeriod = constants.Period60Days
-	} else if cfg.ThirtyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, thirtyThreshold) {
-		basePeriod = constants.Period30Days
+	for _, threshold := range cfg.GetSortedLoanPeriodThresholdsDesc() {
+		if rateMeetsThreshold(dailyRate, threshold.ThresholdDecimal) {
+			basePeriod = threshold.Days
+			break
+		}
 	}
 
 	switch condition.Trend {

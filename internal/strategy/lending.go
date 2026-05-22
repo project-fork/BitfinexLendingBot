@@ -445,32 +445,17 @@ func (lb *LendingBot) calculatePeriod(dailyRate float64) int {
 		return lb.config.LoanDays
 	}
 
-	oneTwentyThreshold := lb.config.GetOneTwentyDayThresholdDecimal()
-	ninetyThreshold := lb.config.GetNinetyDayThresholdDecimal()
-	sixtyThreshold := lb.config.GetSixtyDayThresholdDecimal()
-	thirtyThreshold := lb.config.GetThirtyDayThresholdDecimal()
-
-	if lb.config.OneTwentyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, oneTwentyThreshold) {
-		lb.getLogger().Printf("期限决策 - 利率 %.6f%% 达到 120天阈值 %.6f%%，使用 120 天",
-			decimalDailyRateToPercent(dailyRate), lb.config.OneTwentyDayLendRateThreshold)
-		return constants.Period120Days
-	} else if lb.config.NinetyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, ninetyThreshold) {
-		lb.getLogger().Printf("期限决策 - 利率 %.6f%% 达到 90天阈值 %.6f%%，使用 90 天",
-			decimalDailyRateToPercent(dailyRate), lb.config.NinetyDayLendRateThreshold)
-		return constants.Period90Days
-	} else if lb.config.SixtyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, sixtyThreshold) {
-		lb.getLogger().Printf("期限决策 - 利率 %.6f%% 达到 60天阈值 %.6f%%，使用 60 天",
-			decimalDailyRateToPercent(dailyRate), lb.config.SixtyDayLendRateThreshold)
-		return constants.Period60Days
-	} else if lb.config.ThirtyDayLendRateThreshold > 0 && rateMeetsThreshold(dailyRate, thirtyThreshold) {
-		lb.getLogger().Printf("期限决策 - 利率 %.6f%% 达到 30天阈值 %.6f%%，使用 30 天",
-			decimalDailyRateToPercent(dailyRate), lb.config.ThirtyDayLendRateThreshold)
-		return constants.Period30Days
-	} else {
-		lb.getLogger().Printf("期限决策 - 利率 %.6f%% 未达任何长期限阈值，使用默认 %d 天",
-			decimalDailyRateToPercent(dailyRate), constants.DefaultPeriodDays)
-		return constants.DefaultPeriodDays
+	for _, threshold := range lb.config.GetSortedLoanPeriodThresholdsDesc() {
+		if rateMeetsThreshold(dailyRate, threshold.ThresholdDecimal) {
+			lb.getLogger().Printf("期限决策 - 利率 %.6f%% 达到 %d天阈值 %.6f%%，使用 %d 天",
+				decimalDailyRateToPercent(dailyRate), threshold.Days, threshold.ThresholdPercent, threshold.Days)
+			return threshold.Days
+		}
 	}
+
+	lb.getLogger().Printf("期限决策 - 利率 %.6f%% 未达任何长期限阈值，使用默认 %d 天",
+		decimalDailyRateToPercent(dailyRate), constants.DefaultPeriodDays)
+	return constants.DefaultPeriodDays
 }
 
 func rateMeetsThreshold(rate float64, threshold float64) bool {

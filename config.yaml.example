@@ -1,46 +1,81 @@
-BITFINEX_API_KEY: "your_api_key_here"
-BITFINEX_SECRET_KEY: "your_secret_key_here"
+# =========================
+# Bitfinex API 认证
+# =========================
+BITFINEX_API_KEY:               ""                 # Bitfinex API Key；需要具备 Funding 相关权限
+BITFINEX_SECRET_KEY:            ""                 # Bitfinex API Secret；与 API Key 配套使用
 
-CURRENCY: "usd"
+# =========================
+# Telegram 机器人
+# =========================
+TELEGRAM_BOT_TOKEN:             ""                 # Telegram Bot Token；用于发送通知与接收命令
+TELEGRAM_AUTH_TOKEN:            ""                 # Telegram 鉴权口令；首次 /auth 时用于绑定授权用户
 
-ORDER_LIMIT: 5 # 每次挂单只挂几笔，避免一次挂太多都成立，错过大利率
-RUN_ONLY_ON_NEW_CREDITS: false # true 时仅在新借贷成交或可用余额显著增加时重跑策略
-MINUTES_RUN: 10 # 每隔几分钟执行一次
+# =========================
+# 通知设定
+# =========================
+NOTIFY_RATE_THRESHOLD:         0.045               # 利率通知阈值；每小时检查最近 12 根 5 分钟 K 线高点，超过时发送 Telegram 通知
+NOTIFICATION_FORMAT:           "classic"           # 通知格式；classic 为纯文本，aligned 为 <pre> 对齐格式
 
-MIN_LOAN: 150 # 每笔最小金额
-#MAX_LOAN: 150 # 每笔最大金额
+# =========================
+# 基本运行设定
+# =========================
+TEST_MODE:                     true                 # 是否启用测试模式；true 只模拟下单不提交真实订单
+CURRENCY:                      "usd"                # 放贷币种；会自动转换为 funding symbol，例如 usd -> fUSD
+STRATEGY:                      "smart"              # 当前策略；可选 traditional | simple | smart | kline
+ORDER_LIMIT:                   5                    # 单次主流程最多提交几笔订单；0 表示不限制
+RUN_ONLY_ON_NEW_CREDITS:       false                # 是否只在新借贷成交或余额显著增加时重跑主流程
+MINUTES_RUN:                   10                   # 主流程定时执行间隔（分钟）；仅在 RUN_ONLY_ON_NEW_CREDITS=false 时生效
+LENDING_CHECK_MINUTES:         5                    # 借贷检查调度间隔（分钟）；用于检测新成交、余额变化和发送借贷通知
 
-MIN_DAILY_LEND_RATE: 0.029 # 最小利率（可设为 FRR，仅分散单改用 FRR 模式；高额持有单维持 HIGH_HOLD_RATE）
-SPREAD_LEND: 30 # 分散单最大目标笔数
-GAP_BOTTOM: 10 # 参数是指 ask 挂单里面第几个 index 下限，通常有好几千个挂单
-GAP_TOP: 5000 # 参数是指 ask 挂单里面第几个 index 上限，通常有好几千个挂单
-THIRTY_DAY_LEND_RATE_THRESHOLD: 0.03 # 超过多少就挂 30 天的单
-SIXTY_DAY_LEND_RATE_THRESHOLD: 0.035 # 超过多少就挂 60 天的单
-NINETY_DAY_LEND_RATE_THRESHOLD: 0.04 # 超过多少就挂 90 天的单
-ONE_TWENTY_DAY_LEND_RATE_THRESHOLD: 0.05 # 超过多少就挂 120 天的单
-HIGH_HOLD_RATE: 0.06
-HIGH_HOLD_AMOUNT: 2000
-HIGH_HOLD_ORDERS: 1
-RATE_BONUS: 0.002 # 当下次执行时没有未成功订单时就加利率（避免订单成功全都在低利率上）
+# =========================
+# 贷出金额控制
+# =========================
+MIN_LOAN:                      150                  # 单笔最小贷出金额；低于该值的订单不会创建
+# MAX_LOAN:                    150                  # 单笔最大贷出金额；注释掉或设为 0 表示不限制
+RESERVE_AMOUNT:                0                    # 预留不参与放贷的金额；执行前会先从可用余额中扣除
 
-TELEGRAM_BOT_TOKEN: "your_telegram_bot_token_here"
-TELEGRAM_AUTH_TOKEN: "your_secure_auth_token_here"
+# =========================
+# 利率与分散单通用设定
+# =========================
+MIN_DAILY_LEND_RATE:            0.029              # 最低日利率；可填数值或 FRR，FRR 时仅分散单使用浮动利率模式
+SPREAD_LEND:                    30                 # 分散单最大目标笔数；实际笔数还会受资金、MIN_LOAN、MAX_LOAN 和 ORDER_LIMIT 影响
+RATE_BONUS:                     0.002              # 无既有未成交订单时附加的利率加成；避免全部订单都成交在过低利率
+LOAN_PERIOD_THRESHOLDS:                             # 期限阈值字典；key=天数，value=触发该天数的日利率阈值（百分比）
+  30:                         0.03                 # 日利率达到 0.03% 时可挂 30 天
+  60:                         0.035                # 日利率达到 0.035% 时可挂 60 天
+  90:                         0.04                 # 日利率达到 0.04% 时可挂 90 天
+  120:                        0.05                 # 日利率达到 0.05% 时可挂 120 天
+LOAN_DAYS:                     0                   # 固定借贷天数；0 表示按策略和阈值自动决定，2-120 表示固定期限
 
-NOTIFY_RATE_THRESHOLD: 0.045
-RESERVE_AMOUNT: 0
-NOTIFICATION_FORMAT: "classic" # classic 为现有纯文本格式，aligned 为 <pre> 对齐格式
+# =========================
+# 高额挂单持有策略
+# =========================
+HIGH_HOLD_RATE:                0.05                # 高额持有单的基础日利率；传统策略固定使用，simple/smart 会以此为基准动态调整
+HIGH_HOLD_AMOUNT:              1000                # 单笔高额持有目标金额；simple/传统可在余额不足时降为剩余余额，smart 需满足配比条件
+HIGH_HOLD_ORDERS:              1                   # 高额持有订单数量；大于 1 时会尝试拆成多笔相同金额的高额持有单
 
-STRATEGY: "smart" # 当前策略（traditional / simple / smart / kline）
-VOLATILITY_THRESHOLD: 0.002      # 高波动阈值（默认: 0.002）
-MAX_RATE_MULTIPLIER: 2.0         # 最大利率倍数（默认: 2.0）
-MIN_RATE_MULTIPLIER: 0.8         # 最小利率倍数（默认: 0.8）
-RATE_RANGE_INCREASE_PERCENT: 0.6 # 利率范围增加百分比（默认: 0.2 = 20%）
-FUNDING_BOOK_RATE_UNDERCUT: 0.000001 # Funding Book 利率下调量，百分比格式；0.000001 表示从 0.030137% 挂到 0.030136%
+# =========================
+# 传统策略深度参数
+# 仅 STRATEGY=traditional 时生效
+# =========================
+GAP_BOTTOM:                     10                 # Funding Book 深度下限；表示从第几个 ask 档位开始取价
+GAP_TOP:                        5000               # Funding Book 深度上限；表示最深参考到第几个 ask 档位
 
-KLINE_TIME_FRAME: "15m"
-KLINE_PERIOD: 24
-KLINE_SPREAD_PERCENT: 0
-KLINE_SMOOTH_METHOD: "ema"
+# =========================
+# simple / smart 共用参数
+# 仅 STRATEGY=simple 或 smart 时生效
+# =========================
+VOLATILITY_THRESHOLD:          0.002               # 高波动阈值；超过时 simple/smart 会变得更保守
+MAX_RATE_MULTIPLIER:           2.0                 # 动态利率最大倍数；相对 HIGH_HOLD_RATE 的放大上限
+MIN_RATE_MULTIPLIER:           0.8                 # 动态利率最小倍数；相对 HIGH_HOLD_RATE 的保底下限
+RATE_RANGE_INCREASE_PERCENT:   0.6                 # 分散单利率范围扩展比例；用于构建递增利率序列
+FUNDING_BOOK_RATE_UNDERCUT:    0.000001            # Funding Book 压价量；0.000001 表示从 0.030137% 挂到 0.030136%
 
-LENDING_CHECK_MINUTES: 5 # 每隔五分钟检查是否有成功借贷的订单
-TEST_MODE: true
+# =========================
+# K 线策略参数
+# 仅 STRATEGY=kline 时生效
+# =========================
+KLINE_TIME_FRAME:              "15m"               # K 线时间框架；可选 5m / 15m / 30m / 1h / 3h / 6h / 12h / 1D
+KLINE_PERIOD:                  24                  # 取多少根 K 线用于分析；例如 24 根 15m = 最近 6 小时
+KLINE_SPREAD_PERCENT:          0                   # 在 K 线目标利率基础上再增加的百分比；0 表示不额外加成
+KLINE_SMOOTH_METHOD:           "ema"               # K 线利率平滑方法；可选 max / sma / ema / hla / p90

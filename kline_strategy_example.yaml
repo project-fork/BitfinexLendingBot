@@ -20,8 +20,9 @@ MIN_DAILY_LEND_RATE: 0.01  # 最低日利率 0.01%
 SPREAD_LEND: 5             # 分散单最大目标笔数
 
 # 期间设定
-THIRTY_DAY_LEND_RATE_THRESHOLD: 0.05    # 30天期间阈值 0.05%
-ONE_TWENTY_DAY_LEND_RATE_THRESHOLD: 0.1 # 120天期间阈值 0.1%
+LOAN_PERIOD_THRESHOLDS:
+  30: 0.05                 # 30天期间阈值 0.05%
+  120: 0.1                 # 120天期间阈值 0.1%
 RATE_BONUS: 0.01  # 利率加成 0.01%
 
 # 高额持有策略

@@ -9,11 +9,13 @@ import (
 func TestLendingBot_CalculatePeriod_UsesConfiguredIntermediatePeriods(t *testing.T) {
 	bot := &LendingBot{
 		config: &config.Config{
-			MinDailyLendRate:              0.02,
-			ThirtyDayLendRateThreshold:    0.03,
-			SixtyDayLendRateThreshold:     0.035,
-			NinetyDayLendRateThreshold:    0.04,
-			OneTwentyDayLendRateThreshold: 0.05,
+			MinDailyLendRate: 0.02,
+			LoanPeriodThresholds: map[int]float64{
+				30:  0.03,
+				60:  0.035,
+				90:  0.04,
+				120: 0.05,
+			},
 		},
 	}
 

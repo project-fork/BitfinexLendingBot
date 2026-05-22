@@ -74,10 +74,11 @@ MIN_DAILY_LEND_RATE: 0.038       # 可设数值或 FRR
 SPREAD_LEND: 30                  # 分散单最大目标笔数
 GAP_BOTTOM: 10                   # 挂单深度下限
 GAP_TOP: 5000                    # 挂单深度上限
-THIRTY_DAY_LEND_RATE_THRESHOLD: 0.04
-SIXTY_DAY_LEND_RATE_THRESHOLD: 0.042
-NINETY_DAY_LEND_RATE_THRESHOLD: 0.044
-ONE_TWENTY_DAY_LEND_RATE_THRESHOLD: 0.045
+LOAN_PERIOD_THRESHOLDS:
+  30: 0.04
+  60: 0.042
+  90: 0.044
+  120: 0.045
 RATE_BONUS: 0.002                # 没有未完成挂单时的利率加成
 ```
 

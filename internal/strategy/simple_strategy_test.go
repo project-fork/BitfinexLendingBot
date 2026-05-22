@@ -9,19 +9,21 @@ import (
 
 func TestSimpleStrategy_CalculateOffers_UsesAvailableBalanceForHighHold(t *testing.T) {
 	cfg := &config.Config{
-		MinLoan:                       150.0,
-		MaxLoan:                       1000.0,
-		SpreadLend:                    3,
-		HighHoldAmount:                500.0,
-		HighHoldOrders:                1,
-		HighHoldRate:                  0.1,
-		MinDailyLendRate:              0.02,
-		ThirtyDayLendRateThreshold:    0.04,
-		OneTwentyDayLendRateThreshold: 0.045,
-		Strategy:                      config.StrategySimple,
-		VolatilityThreshold:           0.002,
-		MaxRateMultiplier:             2.0,
-		MinRateMultiplier:             0.8,
+		MinLoan:          150.0,
+		MaxLoan:          1000.0,
+		SpreadLend:       3,
+		HighHoldAmount:   500.0,
+		HighHoldOrders:   1,
+		HighHoldRate:     0.1,
+		MinDailyLendRate: 0.02,
+		LoanPeriodThresholds: map[int]float64{
+			30:  0.04,
+			120: 0.045,
+		},
+		Strategy:            config.StrategySimple,
+		VolatilityThreshold: 0.002,
+		MaxRateMultiplier:   2.0,
+		MinRateMultiplier:   0.8,
 	}
 
 	strategy := NewSimpleStrategy(cfg)
@@ -41,20 +43,22 @@ func TestSimpleStrategy_CalculateOffers_UsesAvailableBalanceForHighHold(t *testi
 
 func TestSimpleStrategy_CalculateOffers_RespectsOrderLimitAfterHighHold(t *testing.T) {
 	cfg := &config.Config{
-		MinLoan:                       150.0,
-		MaxLoan:                       300.0,
-		SpreadLend:                    15,
-		OrderLimit:                    4,
-		HighHoldAmount:                300.0,
-		HighHoldOrders:                1,
-		HighHoldRate:                  0.1,
-		MinDailyLendRate:              0.02,
-		ThirtyDayLendRateThreshold:    0.04,
-		OneTwentyDayLendRateThreshold: 0.045,
-		Strategy:                      config.StrategySimple,
-		VolatilityThreshold:           0.002,
-		MaxRateMultiplier:             2.0,
-		MinRateMultiplier:             0.8,
+		MinLoan:          150.0,
+		MaxLoan:          300.0,
+		SpreadLend:       15,
+		OrderLimit:       4,
+		HighHoldAmount:   300.0,
+		HighHoldOrders:   1,
+		HighHoldRate:     0.1,
+		MinDailyLendRate: 0.02,
+		LoanPeriodThresholds: map[int]float64{
+			30:  0.04,
+			120: 0.045,
+		},
+		Strategy:            config.StrategySimple,
+		VolatilityThreshold: 0.002,
+		MaxRateMultiplier:   2.0,
+		MinRateMultiplier:   0.8,
 	}
 
 	strategy := NewSimpleStrategy(cfg)

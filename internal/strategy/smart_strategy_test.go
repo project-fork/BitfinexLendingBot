@@ -213,11 +213,13 @@ func TestSmartStrategy_CalculateProgressiveRate_DoesNotUndercutBelowMinimum(t *t
 
 func TestSmartStrategy_CalculateSmartPeriod(t *testing.T) {
 	cfg := &config.Config{
-		ThirtyDayLendRateThreshold:    0.04,
-		SixtyDayLendRateThreshold:     0.042,
-		NinetyDayLendRateThreshold:    0.044,
-		OneTwentyDayLendRateThreshold: 0.045,
-		VolatilityThreshold:           0.002,
+		LoanPeriodThresholds: map[int]float64{
+			30:  0.04,
+			60:  0.042,
+			90:  0.044,
+			120: 0.045,
+		},
+		VolatilityThreshold: 0.002,
 	}
 	strategy := NewSmartStrategy(cfg)
 
@@ -329,19 +331,21 @@ func TestSmartStrategy_CalculateSmartPeriod_FixedLoanDays(t *testing.T) {
 
 func TestSmartStrategy_CalculateSmartOffers(t *testing.T) {
 	cfg := &config.Config{
-		MinLoan:                       150.0,
-		MaxLoan:                       1000.0,
-		SpreadLend:                    3,
-		HighHoldAmount:                500.0,
-		HighHoldOrders:                1,
-		HighHoldRate:                  0.1,
-		MinDailyLendRate:              0.02,
-		ThirtyDayLendRateThreshold:    0.04,
-		OneTwentyDayLendRateThreshold: 0.045,
-		Strategy:                      config.StrategySmart,
-		VolatilityThreshold:           0.002,
-		MaxRateMultiplier:             2.0,
-		MinRateMultiplier:             0.8,
+		MinLoan:          150.0,
+		MaxLoan:          1000.0,
+		SpreadLend:       3,
+		HighHoldAmount:   500.0,
+		HighHoldOrders:   1,
+		HighHoldRate:     0.1,
+		MinDailyLendRate: 0.02,
+		LoanPeriodThresholds: map[int]float64{
+			30:  0.04,
+			120: 0.045,
+		},
+		Strategy:            config.StrategySmart,
+		VolatilityThreshold: 0.002,
+		MaxRateMultiplier:   2.0,
+		MinRateMultiplier:   0.8,
 	}
 	strategy := NewSmartStrategy(cfg)
 
@@ -407,19 +411,21 @@ func TestSmartStrategy_CalculateSmartOffers(t *testing.T) {
 
 func TestSmartStrategy_CalculateSmartOffers_DoesNotUseRemainingBalanceAsHighHold(t *testing.T) {
 	cfg := &config.Config{
-		MinLoan:                       150.0,
-		MaxLoan:                       1000.0,
-		SpreadLend:                    3,
-		HighHoldAmount:                500.0,
-		HighHoldOrders:                1,
-		HighHoldRate:                  0.1,
-		MinDailyLendRate:              0.02,
-		ThirtyDayLendRateThreshold:    0.04,
-		OneTwentyDayLendRateThreshold: 0.045,
-		Strategy:                      config.StrategySmart,
-		VolatilityThreshold:           0.002,
-		MaxRateMultiplier:             2.0,
-		MinRateMultiplier:             0.8,
+		MinLoan:          150.0,
+		MaxLoan:          1000.0,
+		SpreadLend:       3,
+		HighHoldAmount:   500.0,
+		HighHoldOrders:   1,
+		HighHoldRate:     0.1,
+		MinDailyLendRate: 0.02,
+		LoanPeriodThresholds: map[int]float64{
+			30:  0.04,
+			120: 0.045,
+		},
+		Strategy:            config.StrategySmart,
+		VolatilityThreshold: 0.002,
+		MaxRateMultiplier:   2.0,
+		MinRateMultiplier:   0.8,
 	}
 	strategy := NewSmartStrategy(cfg)
 
@@ -439,19 +445,21 @@ func TestSmartStrategy_CalculateSmartOffers_DoesNotUseRemainingBalanceAsHighHold
 
 func TestSmartStrategy_CalculateSmartOffers_RequiresAllocationToEnableHighHold(t *testing.T) {
 	cfg := &config.Config{
-		MinLoan:                       150.0,
-		MaxLoan:                       1000.0,
-		SpreadLend:                    3,
-		HighHoldAmount:                500.0,
-		HighHoldOrders:                1,
-		HighHoldRate:                  0.1,
-		MinDailyLendRate:              0.02,
-		ThirtyDayLendRateThreshold:    0.04,
-		OneTwentyDayLendRateThreshold: 0.045,
-		Strategy:                      config.StrategySmart,
-		VolatilityThreshold:           0.002,
-		MaxRateMultiplier:             2.0,
-		MinRateMultiplier:             0.8,
+		MinLoan:          150.0,
+		MaxLoan:          1000.0,
+		SpreadLend:       3,
+		HighHoldAmount:   500.0,
+		HighHoldOrders:   1,
+		HighHoldRate:     0.1,
+		MinDailyLendRate: 0.02,
+		LoanPeriodThresholds: map[int]float64{
+			30:  0.04,
+			120: 0.045,
+		},
+		Strategy:            config.StrategySmart,
+		VolatilityThreshold: 0.002,
+		MaxRateMultiplier:   2.0,
+		MinRateMultiplier:   0.8,
 	}
 	strategy := NewSmartStrategy(cfg)
 
