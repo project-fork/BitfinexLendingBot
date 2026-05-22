@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 
@@ -22,7 +23,21 @@ type Client struct {
 
 // NewClient 创建新的 Bitfinex 客户端
 func NewClient(apiKey, secretKey string) *Client {
-	client := rest.NewClient().Credentials(apiKey, secretKey)
+	nonceGenerator, err := newPersistentNonceGenerator(defaultNonceStateFilePath())
+	if err != nil {
+		nonceGenerator = nil
+	}
+
+	client := rest.NewClient()
+	if nonceGenerator != nil {
+		client = rest.NewClientWithURLNonce("https://api-pub.bitfinex.com/v2/", nonceGenerator)
+	}
+	client = client.Credentials(apiKey, secretKey)
+
+	if nonceGenerator == nil {
+		_, _ = fmt.Fprintf(os.Stderr, "warning: failed to initialize persistent nonce generator, falling back to default nonce behavior\n")
+	}
+
 	return &Client{
 		restClient: client,
 	}

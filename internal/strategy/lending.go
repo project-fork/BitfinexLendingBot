@@ -24,6 +24,9 @@ type LendingBot struct {
 	orderTracker   *tracker.BotOrderTracker
 	notifyCallback func(string) error // Telegram 通知回调函数
 	logger         *log.Logger
+	lastCheckErr   string
+	errNotified    bool
+	lastCredits    map[int64]*bitfinex.FundingCredit
 }
 
 type fundingClient interface {
@@ -598,6 +601,7 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 	currentBalance, err := lb.getAvailableFunds()
 	if err != nil {
 		lb.getLogger().Printf("获取余额失败: %v", err)
+		lb.notifyLendingCheckFailure(err)
 		return false, err
 	}
 
@@ -605,8 +609,11 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 	credits, err := lb.client.GetFundingCredits(lb.config.GetFundingSymbol())
 	if err != nil {
 		lb.getLogger().Printf("获取借贷订单失败: %v", err)
+		lb.notifyLendingCheckFailure(err)
 		return false, err
 	}
+
+	lb.resetLendingCheckFailureState()
 
 	// 获取当前时间戳（毫秒）
 	currentTime := time.Now().UnixNano() / int64(time.Millisecond)
@@ -617,6 +624,7 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 		lb.config.LastLendingCheckTime = currentTime
 		lb.config.LastAvailableBalance = currentBalance
 		lb.config.SeenFundingCreditIDs = buildSeenCreditIDs(credits)
+		lb.lastCredits = buildCreditSnapshot(credits)
 		return false, nil
 	}
 
@@ -625,6 +633,7 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 
 	// 检查1: 是否有新的借贷订单
 	newCredits := findNewCredits(credits, lb.config.SeenFundingCreditIDs, lb.config.LastLendingCheckTime)
+	returnedCredits := findReturnedCredits(lb.lastCredits, credits)
 
 	if len(newCredits) > 0 {
 		shouldExecute = true
@@ -632,6 +641,13 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 		// 发送借贷通知
 		if err := lb.sendLendingNotification(newCredits); err != nil {
 			lb.getLogger().Printf("发送借贷通知失败: %v", err)
+		}
+	}
+
+	if len(returnedCredits) > 0 {
+		reasons = append(reasons, fmt.Sprintf("发现 %d 个贷出已结束/返还订单", len(returnedCredits)))
+		if err := lb.sendReturnedLendingNotification(returnedCredits); err != nil {
+			lb.getLogger().Printf("发送贷出已结束/返还通知失败: %v", err)
 		}
 	}
 
@@ -660,6 +676,7 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 	lb.config.LastLendingCheckTime = currentTime
 	lb.config.LastAvailableBalance = currentBalance
 	lb.config.SeenFundingCreditIDs = buildSeenCreditIDs(credits)
+	lb.lastCredits = buildCreditSnapshot(credits)
 
 	if shouldExecute {
 		lb.getLogger().Printf("触发策略执行，原因: %s", strings.Join(reasons, "; "))
@@ -668,6 +685,35 @@ func (lb *LendingBot) CheckNewLendingCredits() (bool, error) {
 
 	lb.getLogger().Printf("无需执行策略，余额: %.2f (上次: %.2f)，无新借贷订单", currentBalance, lastBalance)
 	return false, nil
+}
+
+func (lb *LendingBot) notifyLendingCheckFailure(err error) {
+	if err == nil {
+		return
+	}
+
+	errMsg := err.Error()
+	if lb.errNotified && lb.lastCheckErr == errMsg {
+		return
+	}
+
+	lb.lastCheckErr = errMsg
+	lb.errNotified = true
+
+	if lb.notifyCallback == nil {
+		lb.getLogger().Println("Telegram 通知回调未设置，跳过借贷检查失败通知")
+		return
+	}
+
+	message := fmt.Sprintf("⚠️ 借贷检查连续失败\n\n原因: %s\n\n机器人暂时无法确认新的贷出成交或余额变化，请检查 Bitfinex API key、nonce 状态与是否存在多实例共用同一组 key。", errMsg)
+	if notifyErr := lb.notifyCallback(message); notifyErr != nil {
+		lb.getLogger().Printf("发送借贷检查失败通知失败: %v", notifyErr)
+	}
+}
+
+func (lb *LendingBot) resetLendingCheckFailureState() {
+	lb.lastCheckErr = ""
+	lb.errNotified = false
 }
 
 func buildSeenCreditIDs(credits []*bitfinex.FundingCredit) map[int64]struct{} {
@@ -679,6 +725,18 @@ func buildSeenCreditIDs(credits []*bitfinex.FundingCredit) map[int64]struct{} {
 		seen[credit.ID] = struct{}{}
 	}
 	return seen
+}
+
+func buildCreditSnapshot(credits []*bitfinex.FundingCredit) map[int64]*bitfinex.FundingCredit {
+	snapshot := make(map[int64]*bitfinex.FundingCredit, len(credits))
+	for _, credit := range credits {
+		if credit == nil || credit.ID == 0 {
+			continue
+		}
+		copied := *credit
+		snapshot[credit.ID] = &copied
+	}
+	return snapshot
 }
 
 func findNewCredits(credits []*bitfinex.FundingCredit, seen map[int64]struct{}, lastCheckTime int64) []*bitfinex.FundingCredit {
@@ -698,6 +756,21 @@ func findNewCredits(credits []*bitfinex.FundingCredit, seen map[int64]struct{}, 
 		}
 	}
 	return newCredits
+}
+
+func findReturnedCredits(previous map[int64]*bitfinex.FundingCredit, current []*bitfinex.FundingCredit) []*bitfinex.FundingCredit {
+	if len(previous) == 0 {
+		return nil
+	}
+
+	currentIDs := buildSeenCreditIDs(current)
+	returned := make([]*bitfinex.FundingCredit, 0)
+	for id, credit := range previous {
+		if _, exists := currentIDs[id]; !exists && credit != nil {
+			returned = append(returned, credit)
+		}
+	}
+	return returned
 }
 
 func (lb *LendingBot) sendBalanceChangeNotification(lastBalance, currentBalance, balanceIncrease float64) {
@@ -802,6 +875,57 @@ func (lb *LendingBot) sendLendingNotification(credits []*bitfinex.FundingCredit)
 	}
 
 	lb.getLogger().Println("借贷订单通知发送成功")
+	return nil
+}
+
+func (lb *LendingBot) sendReturnedLendingNotification(credits []*bitfinex.FundingCredit) error {
+	if lb.notifyCallback == nil {
+		lb.getLogger().Println("Telegram 通知回调未设置，跳过贷出已结束/返还通知")
+		return nil
+	}
+
+	message := "💸 贷出已结束/返还通知\n\n"
+	totalAmount := 0.0
+
+	for i, credit := range credits {
+		if i >= constants.MaxDisplayOrders {
+			remaining := len(credits) - constants.MaxDisplayOrders
+			message += fmt.Sprintf("... 还有 %d 个订单\n", remaining)
+			break
+		}
+
+		effectiveRate := credit.EffectiveDailyRate()
+		openTime := time.Unix(credit.MTSOpened/1000, 0)
+		totalAmount += credit.Amount
+
+		message += fmt.Sprintf("📊 订单 #%d (ID: %d)\n", i+1, credit.ID)
+		message += fmt.Sprintf("💵 金额: %.2f %s\n", credit.Amount, lb.config.Currency)
+		message += fmt.Sprintf("📈 日利率: %.4f%%\n", lb.rateConverter.DecimalToPercentage(effectiveRate))
+		message += fmt.Sprintf("⏰ 期间: %d 天\n", credit.Period)
+		message += fmt.Sprintf("🕐 开始时间: %s\n", openTime.Format("2006-01-02 15:04:05"))
+		message += fmt.Sprintf("🧾 状态: %s\n", credit.Status)
+		message += fmt.Sprintf("🔔 检测时间: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+		message += "\n"
+	}
+
+	for i := constants.MaxDisplayOrders; i < len(credits); i++ {
+		if credits[i] != nil {
+			totalAmount += credits[i].Amount
+		}
+	}
+
+	message += fmt.Sprintf("📊 统计信息:\n")
+	message += fmt.Sprintf("📦 总数量: %d 个订单\n", len(credits))
+	message += fmt.Sprintf("💵 总金额: %.2f %s\n", totalAmount, lb.config.Currency)
+
+	if err := lb.notifyCallback(message); err != nil {
+		lb.getLogger().Printf("发送贷出已结束/返还通知失败: %v", err)
+		lb.getLogger().Println("贷出已结束/返还通知内容:")
+		lb.getLogger().Println(message)
+		return nil
+	}
+
+	lb.getLogger().Println("贷出已结束/返还通知发送成功")
 	return nil
 }
 
