@@ -88,7 +88,7 @@ suggestedRate = bestRate + avgSpread * 0.3
 
 ```yaml
 # 智能策略设定
-ENABLE_SMART_STRATEGY: true     # 启用智能策略
+STRATEGY: "smart"               # 启用智能策略
 
 # 以下参数可以省略，系统会自动使用默认值
 VOLATILITY_THRESHOLD: 0.002     # 高波动阈值 (默认: 0.002)
@@ -103,15 +103,15 @@ MIN_RATE_MULTIPLIER: 0.8        # 最小利率倍数 (默认: 0.8)
 - `MIN_RATE_MULTIPLIER: 0.8`
 
 ### 简化配置
-你可以只设置 `ENABLE_SMART_STRATEGY: true`，其他参数会自动使用建议的默认值：
+你可以只设置 `STRATEGY: "smart"`，其他参数会自动使用建议的默认值：
 
 ```yaml
 # 最简配置 - 使用所有默认值
-ENABLE_SMART_STRATEGY: true
+STRATEGY: "smart"
 ```
 
 ### 参数说明：
-- **ENABLE_SMART_STRATEGY**: 控制是否使用智能策略
+- **STRATEGY**: 设为 `smart` 时使用智能策略
 - **VOLATILITY_THRESHOLD**: 波动率超过此值视为高波动市场，影响：
   - 资金配置比例调整 (+10% 保守配置)
   - 分散贷出数量减少 (70% 倍数)
@@ -165,7 +165,7 @@ ENABLE_SMART_STRATEGY: true
 ## 🚀 使用建议
 
 ### 首次使用：
-1. 保持智能策略启用 (`ENABLE_SMART_STRATEGY: true`)
+1. 保持智能策略启用 (`STRATEGY: "smart"`)
 2. 使用默认波动率阈值 (0.002)
 3. 观察日志中的市场分析信息
 4. 根据实际效果调整参数
@@ -188,7 +188,7 @@ ENABLE_SMART_STRATEGY: true
 
 **保守配置:**
 ```yaml
-ENABLE_SMART_STRATEGY: true
+STRATEGY: "smart"
 VOLATILITY_THRESHOLD: 0.001
 MAX_RATE_MULTIPLIER: 1.5
 MIN_RATE_MULTIPLIER: 0.9
@@ -196,7 +196,7 @@ MIN_RATE_MULTIPLIER: 0.9
 
 **激进配置:**
 ```yaml
-ENABLE_SMART_STRATEGY: true
+STRATEGY: "smart"
 VOLATILITY_THRESHOLD: 0.003
 MAX_RATE_MULTIPLIER: 3.0
 MIN_RATE_MULTIPLIER: 0.7
@@ -233,7 +233,7 @@ VOLATILITY_THRESHOLD: 0.002
 ## 🔄 回退机制
 
 随时可以通过以下方式回退到传统策略：
-1. 设置 `ENABLE_SMART_STRATEGY: false`
+1. 设置 `STRATEGY: "traditional"`
 2. 使用 Telegram 指令 `/smartstrategy off`
 3. 重启程序后生效
 

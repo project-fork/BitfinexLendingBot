@@ -465,11 +465,11 @@ func (b *Bot) handleHelp(chatID int64) {
 /raterangeincrease [数值] - 设置利率范围增加百分比 (0-100%)
 
 🧠 策略指令:
-/klinestrategy on - 启用K线策略 (最高优先级)
+/klinestrategy on - 切换到K线策略
 /klinestrategy off - 停用K线策略
-/simplestrategy on - 启用简单策略 (中等优先级)
+/simplestrategy on - 切换到简单策略
 /simplestrategy off - 停用简单策略
-/smartstrategy on - 启用智能策略 (较低优先级)
+/smartstrategy on - 切换到智能策略
 /smartstrategy off - 停用智能策略
 /smoothmethod [方法] - 设置K线利率平滑方法 (max/sma/ema/hla/p90)
 
@@ -479,7 +479,7 @@ func (b *Bot) handleHelp(chatID int64) {
 /canceloffers [all] - 取消未成交订单，默认仅取消程序追踪订单；加 all 取消全部
 /help - 显示此帮助消息
 
-💡 策略优先级: K线策略 > 简单策略 > 智能策略 > 传统策略`
+💡 当前只会启用一种策略，由 STRATEGY 决定`
 
 	b.sendMessage(chatID, helpText)
 }

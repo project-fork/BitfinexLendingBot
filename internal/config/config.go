@@ -54,9 +54,8 @@ type Config struct {
 	ReserveAmount       float64 `mapstructure:"RESERVE_AMOUNT"`
 	NotificationFormat  string  `mapstructure:"NOTIFICATION_FORMAT"`
 
-	// 智能策略设定
-	EnableSimpleStrategy     bool    `mapstructure:"ENABLE_SIMPLE_STRATEGY"`
-	EnableSmartStrategy      bool    `mapstructure:"ENABLE_SMART_STRATEGY"`
+	// 策略设定
+	Strategy                 string  `mapstructure:"STRATEGY"`
 	VolatilityThreshold      float64 `mapstructure:"VOLATILITY_THRESHOLD"`
 	MaxRateMultiplier        float64 `mapstructure:"MAX_RATE_MULTIPLIER"`
 	MinRateMultiplier        float64 `mapstructure:"MIN_RATE_MULTIPLIER"`
@@ -64,11 +63,10 @@ type Config struct {
 	RateRangeIncreasePercent float64 `mapstructure:"RATE_RANGE_INCREASE_PERCENT"` // 利率范围增加百分比
 
 	// K线策略设定
-	EnableKlineStrategy bool    `mapstructure:"ENABLE_KLINE_STRATEGY"` // 启用K线策略
-	KlineTimeFrame      string  `mapstructure:"KLINE_TIME_FRAME"`      // K线时间框架，默认15m
-	KlinePeriod         int     `mapstructure:"KLINE_PERIOD"`          // K线周期数量，默认24（6小时）
-	KlineSpreadPercent  float64 `mapstructure:"KLINE_SPREAD_PERCENT"`  // K线最高点加成百分比，默认0%
-	KlineSmoothMethod   string  `mapstructure:"KLINE_SMOOTH_METHOD"`   // K线利率平滑方法：max, sma, ema, hla, p90
+	KlineTimeFrame     string  `mapstructure:"KLINE_TIME_FRAME"`     // K线时间框架，默认15m
+	KlinePeriod        int     `mapstructure:"KLINE_PERIOD"`         // K线周期数量，默认24（6小时）
+	KlineSpreadPercent float64 `mapstructure:"KLINE_SPREAD_PERCENT"` // K线最高点加成百分比，默认0%
+	KlineSmoothMethod  string  `mapstructure:"KLINE_SMOOTH_METHOD"`  // K线利率平滑方法：max, sma, ema, hla, p90
 
 	// 测试模式设定
 	TestMode bool `mapstructure:"TEST_MODE"`
@@ -150,8 +148,14 @@ func (c *Config) Validate() error {
 		return errors.NewValidationError("invalid GAP_BOTTOM or GAP_TOP values")
 	}
 
-	// 验证智能策略参数
-	if c.EnableSmartStrategy || c.EnableSimpleStrategy {
+	switch c.GetStrategy() {
+	case StrategyTraditional, StrategySimple, StrategySmart, StrategyKline:
+	default:
+		return errors.NewValidationError("STRATEGY must be one of: traditional, simple, smart, kline")
+	}
+
+	// 验证智能/简单策略参数
+	if c.UsesAdaptiveStrategyParams() {
 		if c.VolatilityThreshold <= 0 || c.VolatilityThreshold > 0.01 {
 			return errors.NewValidationError("VOLATILITY_THRESHOLD must be between 0 and 0.01")
 		}
@@ -173,9 +177,9 @@ func (c *Config) Validate() error {
 	}
 
 	// 验证K线策略参数
-	if c.EnableKlineStrategy {
+	if c.IsKlineStrategy() {
 		if c.KlineTimeFrame == "" {
-			return errors.NewValidationError("KLINE_TIME_FRAME is required when ENABLE_KLINE_STRATEGY is true")
+			return errors.NewValidationError("KLINE_TIME_FRAME is required when STRATEGY is kline")
 		}
 		if c.KlinePeriod <= 0 {
 			return errors.NewValidationError("KLINE_PERIOD must be positive")
@@ -211,6 +215,45 @@ func (c *Config) Validate() error {
 // GetFundingSymbol 获取 funding symbol
 func (c *Config) GetFundingSymbol() string {
 	return constants.FundingSymbolPrefix + strings.ToUpper(c.Currency)
+}
+
+const (
+	StrategyTraditional = "traditional"
+	StrategySimple      = "simple"
+	StrategySmart       = "smart"
+	StrategyKline       = "kline"
+)
+
+func (c *Config) GetStrategy() string {
+	strategy := strings.ToLower(strings.TrimSpace(c.Strategy))
+	if strategy == "" {
+		return StrategyTraditional
+	}
+	return strategy
+}
+
+func (c *Config) SetStrategy(strategy string) {
+	c.Strategy = strings.ToLower(strings.TrimSpace(strategy))
+}
+
+func (c *Config) IsTraditionalStrategy() bool {
+	return c.GetStrategy() == StrategyTraditional
+}
+
+func (c *Config) IsSimpleStrategy() bool {
+	return c.GetStrategy() == StrategySimple
+}
+
+func (c *Config) IsSmartStrategy() bool {
+	return c.GetStrategy() == StrategySmart
+}
+
+func (c *Config) IsKlineStrategy() bool {
+	return c.GetStrategy() == StrategyKline
+}
+
+func (c *Config) UsesAdaptiveStrategyParams() bool {
+	return c.IsSimpleStrategy() || c.IsSmartStrategy()
 }
 
 // GetMinDailyRateDecimal 获取最低日利率（小数格式）
@@ -347,7 +390,7 @@ func (c *Config) setSmartStrategyDefaults() {
 // setKlineStrategyDefaults 设置K线策略参数的默认值
 func (c *Config) setKlineStrategyDefaults() {
 	// 如果K线策略启用但参数为空，设置默认值
-	if c.EnableKlineStrategy {
+	if c.IsKlineStrategy() {
 		if c.KlineTimeFrame == "" {
 			c.KlineTimeFrame = "15m"
 		}

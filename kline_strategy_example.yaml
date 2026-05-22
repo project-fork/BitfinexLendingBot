@@ -30,13 +30,10 @@ HIGH_HOLD_AMOUNT: 5000.0
 HIGH_HOLD_ORDERS: 2
 
 # K线策略设定（新增）
-ENABLE_KLINE_STRATEGY: true     # 启用K线策略
+STRATEGY: "kline"               # 启用K线策略
 KLINE_TIME_FRAME: "15m"         # K线时间框架：15分钟
 KLINE_PERIOD: 24                # K线周期数量：24个15分钟K线（6小时）
 KLINE_SPREAD_PERCENT: 5.0       # K线最高点加成百分比：5%
-
-# 其他策略设定（禁用）
-ENABLE_SMART_STRATEGY: false    # 禁用智能策略，使用K线策略
 
 # Telegram 设定
 TELEGRAM_BOT_TOKEN: "your_telegram_bot_token"
@@ -76,7 +73,8 @@ TEST_MODE: false
 #   * 中期策略：1h K线，12-24周期（12-24小时）
 #   * 长期策略：6h K线，7-14周期（2-4天）
 
-# 优先级顺序：
-# 1. ENABLE_KLINE_STRATEGY (最高优先级)
-# 2. ENABLE_SMART_STRATEGY (中等优先级)
-# 3. 传统策略 (默认策略)
+# 策略值说明：
+# STRATEGY: "kline"        -> K线策略
+# STRATEGY: "smart"        -> 智能策略
+# STRATEGY: "simple"       -> 简单策略
+# STRATEGY: "traditional"  -> 传统策略

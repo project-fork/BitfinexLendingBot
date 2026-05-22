@@ -95,20 +95,19 @@ HIGH_HOLD_ORDERS: 1
 ### 🧠 智能策略
 
 ```yaml
-ENABLE_SIMPLE_STRATEGY: false
-ENABLE_SMART_STRATEGY: true
+STRATEGY: "smart"                # traditional / simple / smart / kline
 VOLATILITY_THRESHOLD: 0.002
 MAX_RATE_MULTIPLIER: 2.0
 MIN_RATE_MULTIPLIER: 0.8
 RATE_RANGE_INCREASE_PERCENT: 0.2
 ```
 
-`ENABLE_SIMPLE_STRATEGY` 会启用“高额持有优先 + 剩余资金补单”的执行兼容策略；`ENABLE_SMART_STRATEGY` 则恢复为以资金配比为核心的自适应智能策略。
+`STRATEGY: "simple"` 会启用“高额持有优先 + 剩余资金补单”的执行兼容策略；`STRATEGY: "smart"` 则恢复为以资金配比为核心的自适应智能策略。
 
 ### 📊 K 线策略
 
 ```yaml
-ENABLE_KLINE_STRATEGY: false
+STRATEGY: "kline"
 KLINE_TIME_FRAME: "15m"
 KLINE_PERIOD: 24
 KLINE_SPREAD_PERCENT: 0
@@ -127,10 +126,10 @@ NOTIFY_RATE_THRESHOLD: 0.1
 
 ### 策略优先级
 
-1. **K 线策略**
-2. **简单策略**
-3. **智能策略**
-4. **传统策略**
+- `STRATEGY: "kline"`：K 线策略
+- `STRATEGY: "simple"`：简单策略
+- `STRATEGY: "smart"`：智能策略
+- `STRATEGY: "traditional"`：传统策略
 
 ### 定时模式
 

@@ -21,7 +21,7 @@
 
 ```yaml
 # Funding Rate 叠加策略
-ENABLE_KLINE_STRATEGY: true          # 启用策略
+STRATEGY: "kline"                    # 启用策略
 KLINE_PERIOD: "15m"                  # 参数名保持不变（便于兼容）
 KLINE_STACKING_PERCENT: 0.001        # 叠加百分比 (0.1%)
 KLINE_STACKING_LAYERS: 5             # 叠加层数

@@ -159,16 +159,17 @@ func (lb *LendingBot) execute(cancelTrackedOffers bool) error {
 
 	// 根据配置选择策略
 	var loanOffers []*LoanOffer
-	if lb.config.EnableKlineStrategy {
+	switch lb.config.GetStrategy() {
+	case config.StrategyKline:
 		logger.Println("使用K线策略计算贷出订单...")
 		loanOffers = lb.calculateKlineOffers(fundsAvailable)
-	} else if lb.config.EnableSimpleStrategy {
+	case config.StrategySimple:
 		logger.Println("使用简单策略计算贷出订单...")
 		loanOffers = lb.simpleStrategy.CalculateOffers(fundsAvailable, fundingBook)
-	} else if lb.config.EnableSmartStrategy {
+	case config.StrategySmart:
 		logger.Println("使用智能策略计算贷出订单...")
 		loanOffers = lb.smartStrategy.CalculateSmartOffers(fundsAvailable, fundingBook)
-	} else {
+	default:
 		logger.Println("使用传统策略计算贷出订单...")
 		loanOffers = lb.calculateLoanOffers(fundsAvailable, fundingBook)
 	}

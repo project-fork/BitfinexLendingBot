@@ -30,15 +30,13 @@ NOTIFY_RATE_THRESHOLD: 0.045
 RESERVE_AMOUNT: 0
 NOTIFICATION_FORMAT: "classic" # classic 为现有纯文本格式，aligned 为 <pre> 对齐格式
 
-ENABLE_SIMPLE_STRATEGY: false # 启用简单策略（高额持有优先 + 剩余补单）
-ENABLE_SMART_STRATEGY: true # 启用智能策略（自适应资金配比）
+STRATEGY: "smart" # 当前策略（traditional / simple / smart / kline）
 VOLATILITY_THRESHOLD: 0.002      # 高波动阈值（默认: 0.002）
 MAX_RATE_MULTIPLIER: 2.0         # 最大利率倍数（默认: 2.0）
 MIN_RATE_MULTIPLIER: 0.8         # 最小利率倍数（默认: 0.8）
 RATE_RANGE_INCREASE_PERCENT: 0.6 # 利率范围增加百分比（默认: 0.2 = 20%）
 FUNDING_BOOK_RATE_UNDERCUT: 0.000001 # Funding Book 利率下调量，百分比格式；0.000001 表示从 0.030137% 挂到 0.030136%
 
-ENABLE_KLINE_STRATEGY: false
 KLINE_TIME_FRAME: "15m"
 KLINE_PERIOD: 24
 KLINE_SPREAD_PERCENT: 0

@@ -16,6 +16,7 @@ func TestConfig_Validate(t *testing.T) {
 			config: Config{
 				BitfinexApiKey:           "test_api_key",
 				BitfinexSecretKey:        "test_secret_key",
+				Strategy:                 StrategySmart,
 				Currency:                 "USD",
 				MinLoan:                  150.0,
 				MaxLoan:                  1000.0,
@@ -24,7 +25,6 @@ func TestConfig_Validate(t *testing.T) {
 				SpreadLend:               30,
 				GapBottom:                10,
 				GapTop:                   5000,
-				EnableSmartStrategy:      true,
 				VolatilityThreshold:      0.002,
 				MaxRateMultiplier:        2.0,
 				MinRateMultiplier:        0.8,
@@ -38,6 +38,7 @@ func TestConfig_Validate(t *testing.T) {
 			config: Config{
 				BitfinexApiKey:           "test_api_key",
 				BitfinexSecretKey:        "test_secret_key",
+				Strategy:                 StrategySmart,
 				Currency:                 "USD",
 				MinLoan:                  150.0,
 				MaxLoan:                  1000.0,
@@ -46,7 +47,6 @@ func TestConfig_Validate(t *testing.T) {
 				SpreadLend:               30,
 				GapBottom:                10,
 				GapTop:                   5000,
-				EnableSmartStrategy:      true,
 				VolatilityThreshold:      0.002,
 				MaxRateMultiplier:        2.0,
 				MinRateMultiplier:        0.8,
@@ -90,6 +90,7 @@ func TestConfig_Validate(t *testing.T) {
 			config: Config{
 				BitfinexApiKey:      "test_api_key",
 				BitfinexSecretKey:   "test_secret_key",
+				Strategy:            StrategySmart,
 				Currency:            "USD",
 				MinLoan:             -150.0,
 				MinDailyLendRate:    0.02,
@@ -105,6 +106,7 @@ func TestConfig_Validate(t *testing.T) {
 			config: Config{
 				BitfinexApiKey:      "test_api_key",
 				BitfinexSecretKey:   "test_secret_key",
+				Strategy:            StrategySmart,
 				Currency:            "USD",
 				MinLoan:             1000.0,
 				MaxLoan:             150.0,
@@ -121,13 +123,13 @@ func TestConfig_Validate(t *testing.T) {
 			config: Config{
 				BitfinexApiKey:      "test_api_key",
 				BitfinexSecretKey:   "test_secret_key",
+				Strategy:            StrategySmart,
 				Currency:            "USD",
 				MinLoan:             150.0,
 				MinDailyLendRate:    0.02,
 				SpreadLend:          30,
 				GapBottom:           10,
 				GapTop:              5000,
-				EnableSmartStrategy: true,
 				VolatilityThreshold: 0.02, // 太大
 				MaxRateMultiplier:   2.0,
 				MinRateMultiplier:   0.8,
