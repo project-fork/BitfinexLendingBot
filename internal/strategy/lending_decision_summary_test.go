@@ -104,16 +104,19 @@ func TestExecute_LogsStrategyDecisionSummary(t *testing.T) {
 	<-done
 
 	logs := builder.String()
-	if !strings.Contains(logs, "策略决策摘要 | strategy=traditional") {
+	if !strings.Contains(logs, "可用余额 $431.985884") {
+		t.Fatalf("expected localized balance log, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "策略决策摘要") {
 		t.Fatalf("expected decision summary log, got:\n%s", logs)
 	}
-	if !strings.Contains(logs, "book_source=required_and_used") {
+	if !strings.Contains(logs, "Funding Book 来源=required_and_used") {
 		t.Fatalf("expected funding book source in summary, got:\n%s", logs)
 	}
-	if !strings.Contains(logs, "requested=") || !strings.Contains(logs, "success=") {
+	if !strings.Contains(logs, "请求=2") || !strings.Contains(logs, "尝试/成功/跳过/失败=2/2/0/0") {
 		t.Fatalf("expected offer counters in summary, got:\n%s", logs)
 	}
-	if !strings.Contains(logs, "fund_sources=") || !strings.Contains(logs, "rate_sources=") || !strings.Contains(logs, "period_sources=") {
+	if !strings.Contains(logs, "资金来源=") || !strings.Contains(logs, "利率来源=") || !strings.Contains(logs, "期限来源=") {
 		t.Fatalf("expected explanation sources in summary, got:\n%s", logs)
 	}
 }

@@ -110,11 +110,16 @@ func TestExecute_StoresLastDecisionSummary(t *testing.T) {
 	text := bot.BuildDecisionSummaryText()
 	for _, fragment := range []string{
 		"📘 最近一次策略决策摘要",
+		"【概览】",
 		"策略: traditional",
 		"触发来源: 自动触发",
-		"冷却豁免: false",
+		"冷却豁免: 否",
 		"跳过原因: 无",
+		"【资金与盘口】",
 		"Funding Book 来源: required_and_used",
+		"【下单结果】",
+		"【决策依据】",
+		"【备注】",
 	} {
 		if !strings.Contains(text, fragment) {
 			t.Fatalf("expected decision summary text to contain %q, got:\n%s", fragment, text)

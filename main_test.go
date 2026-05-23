@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/kfrico/BitfinexLendingBot/internal/config"
 )
@@ -50,6 +51,42 @@ func TestExecuteLendingCheck_SkipsWhileMainTaskRunning(t *testing.T) {
 	}
 }
 
+func TestScheduleLendingCheck_DoesNotRunImmediatelyOnStartup(t *testing.T) {
+	reader, writer := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	app := &Application{
+		config: &config.Config{
+			LendingCheckMinutes: 10,
+		},
+		ctx:           ctx,
+		lendingLogger: log.New(writer, "", log.LstdFlags),
+	}
+
+	var builder strings.Builder
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&builder, reader)
+		close(done)
+	}()
+
+	finished := make(chan struct{})
+	go func() {
+		app.scheduleLendingCheck()
+		close(finished)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	_ = writer.Close()
+	<-finished
+	<-done
+
+	logs := builder.String()
+	if strings.Contains(logs, "主任务执行中，跳过借贷检查") || strings.Contains(logs, "检查借贷订单失败") || strings.Contains(logs, "满足执行触发条件") {
+		t.Fatalf("expected no immediate lending check logs on startup, got:\n%s", logs)
+	}
+}
+
 func TestRunWorker_UsesTaskLoggerPrefix(t *testing.T) {
 	var builder strings.Builder
 	app := &Application{
@@ -59,8 +96,14 @@ func TestRunWorker_UsesTaskLoggerPrefix(t *testing.T) {
 	app.runWorker("MainTask", func() {})
 
 	logs := builder.String()
-	if !strings.Contains(logs, "[MainTask] 启动工作任务: MainTask") {
+	if !strings.Contains(logs, "[MainTask] ============================") {
 		t.Fatalf("expected prefixed start log, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "[MainTask] 启动工作任务: MainTask") {
+		t.Fatalf("expected prefixed start message, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "[MainTask] ---------------------------") {
+		t.Fatalf("expected boundary separator, got:\n%s", logs)
 	}
 	if !strings.Contains(logs, "[MainTask] 工作任务 MainTask 已结束") {
 		t.Fatalf("expected prefixed finish log, got:\n%s", logs)
@@ -84,6 +127,26 @@ func TestBeginMainTask_RejectsConcurrentExecution(t *testing.T) {
 
 	if !strings.Contains(builder.String(), "已有任务运行中") {
 		t.Fatalf("expected skip log, got:\n%s", builder.String())
+	}
+}
+
+func TestLogTaskBoundary_UsesDirectionalSeparators(t *testing.T) {
+	var builder strings.Builder
+	logger := newPrefixedLogger("RateCheck", &builder)
+
+	logTaskBoundary(logger, boundaryStart, "启动工作任务: RateCheck")
+	logTaskBoundary(logger, boundaryEnd, "工作任务 RateCheck 已结束")
+
+	logs := builder.String()
+	for _, fragment := range []string{
+		"[RateCheck] ================================",
+		"[RateCheck] 启动工作任务: RateCheck",
+		"[RateCheck] --------------------------------",
+		"[RateCheck] 工作任务 RateCheck 已结束",
+	} {
+		if !strings.Contains(logs, fragment) {
+			t.Fatalf("expected boundary log to contain %q, got:\n%s", fragment, logs)
+		}
 	}
 }
 

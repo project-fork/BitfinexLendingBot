@@ -209,22 +209,12 @@ func TestLogStrategyDecisionSummary_LogsStructuredSummary(t *testing.T) {
 
 	logs := builder.String()
 	expectedFragments := []string{
-		"策略决策摘要 | strategy=smart",
-		"symbol=fUSD",
-		"trigger=Telegram /run 手动触发",
-		"cooldown_bypassed=true",
-		"skip_reason=无",
-		"requested=3",
-		"success=2",
-		"frr=1",
-		"rate_range=0.030000%~0.040000%",
-		"periods=30,120",
-		"fund_sources=",
-		"depth_sources=",
-		"rate_sources=",
-		"period_sources=",
-		"execution_decisions=",
-		"notes=Funding Book 已用于定价",
+		"策略决策摘要",
+		"概览: 策略=smart | Funding Symbol=fUSD | 触发来源=Telegram /run 手动触发 | 冷却豁免=是 | 跳过原因=无",
+		"资金与盘口: 可用资金=431.9859 | 保留金额=100.0000 | 已有待处理订单=是 | Funding Book 来源=required_and_used | Funding Book 档位数=25",
+		"下单结果: 请求=3 | 尝试/成功/跳过/失败=3/2/1/0 | FRR/固定=1/2 | RATE_BONUS追加=0 | 利率范围=0.030000%~0.040000% | 金额范围=150.0000~200.0000 | 期限=30 | 120",
+		"决策依据: 资金来源=无 | 深度来源=无 | 利率来源=无 | 期限来源=无 | 执行决策=无",
+		"备注: Funding Book 已用于定价",
 	}
 
 	for _, fragment := range expectedFragments {

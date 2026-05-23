@@ -85,7 +85,7 @@ func NewApplication(configPath string) (*Application, error) {
 		rateConverter:  rateConverter,
 		mainLogger:     newPrefixedLogger("MainTask", os.Stderr),
 		lendingLogger:  newPrefixedLogger("LendingCheck", os.Stderr),
-		hourlyLogger:   newPrefixedLogger("HourlyRateCheck", os.Stderr),
+		hourlyLogger:   newPrefixedLogger("RateCheck", os.Stderr),
 		telegramLogger: newPrefixedLogger("TelegramBot", os.Stderr),
 		ctx:            ctx,
 		cancel:         cancel,
@@ -282,7 +282,7 @@ func (app *Application) startWorkers() {
 
 	// 启动每小时利率检查
 	app.wg.Add(1)
-	go app.runWorker("HourlyRateCheck", func() {
+	go app.runWorker("RateCheck", func() {
 		defer app.wg.Done()
 		app.scheduleHourlyRateCheck()
 	})
@@ -312,9 +312,9 @@ func (app *Application) runWorker(name string, worker func()) {
 		}
 	}()
 
-	logger.Printf("启动工作任务: %s", name)
+	logTaskBoundary(logger, boundaryStart, fmt.Sprintf("启动工作任务: %s", name))
 	worker()
-	logger.Printf("工作任务 %s 已结束", name)
+	logTaskBoundary(logger, boundaryEnd, fmt.Sprintf("工作任务 %s 已结束", name))
 }
 
 func (app *Application) getTaskLogger(name string) *log.Logger {
@@ -327,7 +327,7 @@ func (app *Application) getTaskLogger(name string) *log.Logger {
 		if app.lendingLogger != nil {
 			return app.lendingLogger
 		}
-	case "HourlyRateCheck":
+	case "RateCheck":
 		if app.hourlyLogger != nil {
 			return app.hourlyLogger
 		}
@@ -418,11 +418,13 @@ func (app *Application) beginMainTask(trigger string) bool {
 	app.mainTaskRunning = true
 	app.mainTaskMu.Unlock()
 
-	app.mainLogger.Println("============================================================")
-	app.mainLogger.Printf("🔁 开始重跑主策略 #%d", runID)
-	app.mainLogger.Printf("📍 触发来源: %s", trigger)
-	app.mainLogger.Printf("🕒 触发时间: %s", time.Now().Format("2006-01-02 15:04:05"))
-	app.mainLogger.Println("============================================================")
+	logTaskBoundary(
+		app.mainLogger,
+		boundaryStart,
+		fmt.Sprintf("🔁 开始重跑主策略 #%d", runID),
+		fmt.Sprintf("📍 触发来源: %s", trigger),
+		fmt.Sprintf("🕒 触发时间: %s", time.Now().Format("2006-01-02 15:04:05")),
+	)
 	return true
 }
 
@@ -454,15 +456,49 @@ func (app *Application) executeMainTaskBody(trigger string, cancelTrackedOffers 
 
 	if err != nil {
 		app.mainLogger.Printf("❌ 主策略 #%d 执行失败（触发来源: %s）: %v", runID, trigger, err)
-		app.mainLogger.Println("============================================================")
-		app.mainLogger.Printf("🔚 结束主策略 #%d（失败）", runID)
-		app.mainLogger.Println("============================================================")
+		logTaskBoundary(app.mainLogger, boundaryEnd, fmt.Sprintf("🔚 结束主策略 #%d（失败）", runID))
 		return
 	}
 
-	app.mainLogger.Println("============================================================")
-	app.mainLogger.Printf("✅ 结束主策略 #%d（成功）", runID)
-	app.mainLogger.Println("============================================================")
+	logTaskBoundary(app.mainLogger, boundaryEnd, fmt.Sprintf("✅ 结束主策略 #%d（成功）", runID))
+}
+
+type taskBoundaryPhase int
+
+const (
+	boundaryStart taskBoundaryPhase = iota
+	boundaryEnd
+)
+
+func logTaskBoundary(logger *log.Logger, phase taskBoundaryPhase, lines ...string) {
+	if logger == nil {
+		logger = log.Default()
+	}
+
+	maxWidth := 0
+	for _, line := range lines {
+		if len(line) > maxWidth {
+			maxWidth = len(line)
+		}
+	}
+
+	if maxWidth == 0 {
+		maxWidth = 8
+	}
+
+	lineWidth := maxWidth + 8
+	topChar := "="
+	bottomChar := "-"
+	if phase == boundaryEnd {
+		topChar = "-"
+		bottomChar = "="
+	}
+
+	logger.Println(strings.Repeat(topChar, lineWidth))
+	for _, line := range lines {
+		logger.Println(line)
+	}
+	logger.Println(strings.Repeat(bottomChar, lineWidth))
 }
 
 // scheduleHourlyRateCheck 调度每小时利率检查
@@ -565,9 +601,6 @@ func (app *Application) handleRun() error {
 
 // scheduleLendingCheck 调度借贷订单检查
 func (app *Application) scheduleLendingCheck() {
-	// 先执行第一次检查
-	app.executeLendingCheck()
-
 	ticker := time.NewTicker(time.Duration(app.config.LendingCheckMinutes) * time.Minute)
 	defer ticker.Stop()
 

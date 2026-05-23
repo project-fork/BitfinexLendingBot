@@ -217,7 +217,7 @@ func (lb *LendingBot) execute(cancelTrackedOffers bool, triggerSource string, by
 		logger.Printf("取得余额错误: %v", err)
 		return err
 	}
-	logger.Printf("Currency: %s  Available: %f", lb.config.Currency, fundsAvailable)
+	logger.Printf("可用余额 %s", formatBalanceDisplay(lb.config.Currency, fundsAvailable))
 
 	// 扣除保留金额
 	if lb.config.ReserveAmount > 0 {
@@ -839,17 +839,22 @@ func logStrategyDecisionSummary(logger *log.Logger, summary *StrategyDecisionSum
 	periodSourceText := joinOrDefault(summary.PeriodSources)
 	executionDecisionText := joinOrDefault(summary.ExecutionDecisions)
 
-	logger.Printf("策略决策摘要 | strategy=%s | symbol=%s | trigger=%s | cooldown_bypassed=%t | skip_reason=%s | funds=%.4f | reserve=%.4f | pending=%t | book_source=%s | book_entries=%d | requested=%d | attempted=%d | success=%d | skipped=%d | failed=%d | frr=%d | fixed=%d | bonus_applied=%d | rate_range=%.6f%%~%.6f%% | amount_range=%.4f~%.4f | periods=%s | fund_sources=%s | depth_sources=%s | rate_sources=%s | period_sources=%s | execution_decisions=%s | notes=%s",
+	logger.Println("策略决策摘要")
+	logger.Printf("  概览: 策略=%s | Funding Symbol=%s | 触发来源=%s | 冷却豁免=%s | 跳过原因=%s",
 		summary.Strategy,
 		summary.FundingSymbol,
 		defaultString(summary.TriggerSource, "自动触发"),
-		summary.CooldownBypassed,
+		boolText(summary.CooldownBypassed),
 		defaultString(summary.SkipReason, "无"),
+	)
+	logger.Printf("  资金与盘口: 可用资金=%.4f | 保留金额=%.4f | 已有待处理订单=%s | Funding Book 来源=%s | Funding Book 档位数=%d",
 		summary.FundsAvailable,
 		summary.ReserveAmount,
-		summary.HasPendingOrders,
+		boolText(summary.HasPendingOrders),
 		summary.FundingBookSource,
 		summary.FundingBookEntries,
+	)
+	logger.Printf("  下单结果: 请求=%d | 尝试/成功/跳过/失败=%d/%d/%d/%d | FRR/固定=%d/%d | RATE_BONUS追加=%d | 利率范围=%.6f%%~%.6f%% | 金额范围=%.4f~%.4f | 期限=%s",
 		summary.RequestedOfferCount,
 		summary.AttemptedOfferCount,
 		summary.SuccessfulOfferCount,
@@ -862,14 +867,16 @@ func logStrategyDecisionSummary(logger *log.Logger, summary *StrategyDecisionSum
 		summary.MaxOfferRatePercent,
 		summary.MinOfferAmount,
 		summary.MaxOfferAmount,
-		strings.Join(periodParts, ","),
+		joinOrDefault(periodParts),
+	)
+	logger.Printf("  决策依据: 资金来源=%s | 深度来源=%s | 利率来源=%s | 期限来源=%s | 执行决策=%s",
 		fundSourceText,
 		depthSourceText,
 		rateSourceText,
 		periodSourceText,
 		executionDecisionText,
-		noteText,
 	)
+	logger.Printf("  备注: %s", noteText)
 }
 
 func describeDepthSource(fundingBook []*bitfinex.FundingBookEntry, depthIndex int) string {
@@ -1082,15 +1089,15 @@ func (lb *LendingBot) BuildDecisionSummaryText() string {
 	}
 
 	return fmt.Sprintf(
-		"📘 最近一次策略决策摘要\n\n策略: %s\nFunding Symbol: %s\n触发来源: %s\n冷却豁免: %t\n跳过原因: %s\n可用资金: %.4f\n保留金额: %.4f\n已有待处理订单: %t\nFunding Book 来源: %s\nFunding Book 档位数: %d\n请求订单数: %d\n尝试/成功/跳过/失败: %d/%d/%d/%d\nFRR/固定利率: %d/%d\n执行层追加 RATE_BONUS 次数: %d\n利率范围: %.6f%% ~ %.6f%%\n金额范围: %.4f ~ %.4f\n期限: %s\n资金来源: %s\n深度来源: %s\n利率来源: %s\n期限来源: %s\n执行决策: %s\n备注: %s",
+		"📘 最近一次策略决策摘要\n\n【概览】\n策略: %s\nFunding Symbol: %s\n触发来源: %s\n冷却豁免: %s\n跳过原因: %s\n\n【资金与盘口】\n可用资金: %.4f\n保留金额: %.4f\n已有待处理订单: %s\nFunding Book 来源: %s\nFunding Book 档位数: %d\n\n【下单结果】\n请求订单数: %d\n尝试/成功/跳过/失败: %d/%d/%d/%d\nFRR/固定利率: %d/%d\n执行层追加 RATE_BONUS 次数: %d\n利率范围: %.6f%% ~ %.6f%%\n金额范围: %.4f ~ %.4f\n期限: %s\n\n【决策依据】\n资金来源: %s\n深度来源: %s\n利率来源: %s\n期限来源: %s\n执行决策: %s\n\n【备注】\n%s",
 		summary.Strategy,
 		summary.FundingSymbol,
 		defaultString(summary.TriggerSource, "自动触发"),
-		summary.CooldownBypassed,
+		boolText(summary.CooldownBypassed),
 		defaultString(summary.SkipReason, "无"),
 		summary.FundsAvailable,
 		summary.ReserveAmount,
-		summary.HasPendingOrders,
+		boolText(summary.HasPendingOrders),
 		summary.FundingBookSource,
 		summary.FundingBookEntries,
 		summary.RequestedOfferCount,
@@ -1113,6 +1120,36 @@ func (lb *LendingBot) BuildDecisionSummaryText() string {
 		joinOrDefault(summary.ExecutionDecisions),
 		joinOrDefault(summary.Notes),
 	)
+}
+
+func boolText(v bool) string {
+	if v {
+		return "是"
+	}
+	return "否"
+}
+
+func formatBalanceDisplay(currency string, amount float64) string {
+	symbol := currencySymbol(currency)
+	if symbol != "" {
+		return fmt.Sprintf("%s%.6f", symbol, amount)
+	}
+	return fmt.Sprintf("%s %.6f", strings.ToUpper(strings.TrimSpace(currency)), amount)
+}
+
+func currencySymbol(currency string) string {
+	switch strings.ToUpper(strings.TrimSpace(currency)) {
+	case "USD":
+		return "$"
+	case "EUR":
+		return "€"
+	case "GBP":
+		return "£"
+	case "JPY":
+		return "¥"
+	default:
+		return ""
+	}
 }
 
 // BuildRuntimeConfigSummaryText 构建适合 Telegram 展示的运行配置摘要。
