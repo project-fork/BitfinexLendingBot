@@ -26,6 +26,9 @@ func (e *BotError) Unwrap() error {
 const (
 	ErrCodeAPICall           = "API_CALL"
 	ErrCodeRateLimit         = "RATE_LIMIT"
+	ErrCodeAPITimeout        = "API_TIMEOUT"
+	ErrCodeAPIHTTPStatus     = "API_HTTP_STATUS"
+	ErrCodeAPIDecode         = "API_DECODE"
 	ErrCodeConfig            = "CONFIG"
 	ErrCodeInvalidInput      = "INVALID_INPUT"
 	ErrCodeInsufficientFunds = "INSUFFICIENT_FUNDS"
@@ -36,6 +39,22 @@ const (
 // 创建错误的便利函数
 func NewAPIError(message string, err error) *BotError {
 	return &BotError{Code: ErrCodeAPICall, Message: message, Err: err}
+}
+
+func NewRateLimitError(message string, err error) *BotError {
+	return &BotError{Code: ErrCodeRateLimit, Message: message, Err: err}
+}
+
+func NewAPITimeoutError(message string, err error) *BotError {
+	return &BotError{Code: ErrCodeAPITimeout, Message: message, Err: err}
+}
+
+func NewAPIHTTPStatusError(message string, err error) *BotError {
+	return &BotError{Code: ErrCodeAPIHTTPStatus, Message: message, Err: err}
+}
+
+func NewAPIDecodeError(message string, err error) *BotError {
+	return &BotError{Code: ErrCodeAPIDecode, Message: message, Err: err}
 }
 
 func NewConfigError(message string, err error) *BotError {

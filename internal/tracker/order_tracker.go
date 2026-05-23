@@ -116,7 +116,14 @@ func (t *BotOrderTracker) saveLocked() {
 		return
 	}
 
-	state := storage.LoadData(t.dataFilePath)
-	state.TrackedOrders = t.createdOrders
-	storage.SaveData(t.dataFilePath, state)
+	orders := make(map[int64]time.Time, len(t.createdOrders))
+	for orderID, createdTime := range t.createdOrders {
+		orders[orderID] = createdTime
+	}
+
+	if err := storage.UpdateData(t.dataFilePath, func(state *storage.Data) {
+		state.TrackedOrders = orders
+	}); err != nil {
+		return
+	}
 }

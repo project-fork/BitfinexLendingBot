@@ -26,12 +26,15 @@ type LendingBot interface {
 	CheckRateThreshold() (bool, float64, error)
 	ListPendingFundingOffers() ([]*bitfinex.PendingFundingOffer, error)
 	CancelPendingFundingOffers(includeAll bool) (*bitfinex.FundingOfferCancelSummary, error)
+	BuildRuntimeConfigSummaryText() string
+	BuildDecisionSummaryText() string
 }
 
 // Bot Telegram 机器人封装
 type Bot struct {
 	api                 *tgbotapi.BotAPI
 	config              *config.Config
+	runtimeConfig       *config.RuntimeConfigService
 	bitfinexClient      *bitfinex.Client
 	rateConverter       *rates.Converter
 	authenticatedChatID int64
@@ -63,6 +66,7 @@ func NewBot(cfg *config.Config, bfxClient *bitfinex.Client) (*Bot, error) {
 	bot := &Bot{
 		api:            api,
 		config:         cfg,
+		runtimeConfig:  config.NewRuntimeConfigService(cfg),
 		bitfinexClient: bfxClient,
 		rateConverter:  rates.NewConverter(),
 		dataFilePath:   storage.DefaultDataFilePath(),
@@ -70,11 +74,18 @@ func NewBot(cfg *config.Config, bfxClient *bitfinex.Client) (*Bot, error) {
 		pendingReplies: make(map[int64]string),
 	}
 	bot.logger.Printf("Authorized on account %s", api.Self.UserName)
-	bot.loadAuthenticatedChatID()
+	bot.loadPersistentData()
 	if err := bot.registerCommands(); err != nil {
 		bot.logger.Printf("注册 Telegram 命令失败: %v", err)
 	}
 	return bot, nil
+}
+
+func (b *Bot) ensureRuntimeConfig() *config.RuntimeConfigService {
+	if b.runtimeConfig == nil {
+		b.runtimeConfig = config.NewRuntimeConfigService(b.config)
+	}
+	return b.runtimeConfig
 }
 
 func buildTelegramCommands() []telegramCommand {
@@ -86,6 +97,8 @@ func buildTelegramCommands() []telegramCommand {
 		{Command: "check", Description: "查询 | 检查利率阈值"},
 		{Command: "status", Description: "查询 | 显示系统状态"},
 		{Command: "strategy", Description: "查询 | 显示当前策略"},
+		{Command: "configsummary", Description: "查询 | 显示运行配置摘要"},
+		{Command: "decisionsummary", Description: "查询 | 显示最近一次策略决策摘要"},
 		{Command: "lending", Description: "查询 | 查看活跃借贷"},
 		{Command: "offers", Description: "查询 | 查看未成交订单"},
 
@@ -282,9 +295,147 @@ func (b *Bot) saveAuthenticatedChatIDLocked() {
 	if b.dataFilePath == "" {
 		return
 	}
+	if err := storage.UpdateData(b.dataFilePath, func(state *storage.Data) {
+		state.Telegram.AuthenticatedChatID = b.authenticatedChatID
+	}); err != nil {
+		b.getLogger().Printf("保存 Telegram 鉴权 chat id 失败: %v", err)
+	}
+}
+
+func (b *Bot) loadPersistentData() {
+	if b.dataFilePath == "" {
+		return
+	}
+
 	state := storage.LoadData(b.dataFilePath)
-	state.Telegram.AuthenticatedChatID = b.authenticatedChatID
-	storage.SaveData(b.dataFilePath, state)
+	if state.Telegram.AuthenticatedChatID != 0 {
+		b.chatIDMutex.Lock()
+		b.authenticatedChatID = state.Telegram.AuthenticatedChatID
+		b.chatIDMutex.Unlock()
+	}
+
+	if err := b.applyPersistedRuntimeConfig(state.RuntimeConfig); err != nil {
+		b.getLogger().Printf("加载运行时配置持久化数据失败，将继续使用配置文件中的值: %v", err)
+	}
+}
+
+func (b *Bot) applyPersistedRuntimeConfig(data storage.RuntimeConfigData) error {
+	runtimeConfig := b.ensureRuntimeConfig()
+
+	if data.NotifyRateThreshold != nil {
+		if err := runtimeConfig.SetNotifyRateThreshold(*data.NotifyRateThreshold); err != nil {
+			return err
+		}
+	}
+	if data.ReserveAmount != nil {
+		if err := runtimeConfig.SetReserveAmount(*data.ReserveAmount); err != nil {
+			return err
+		}
+	}
+	if data.OrderLimit != nil {
+		if err := runtimeConfig.SetOrderLimit(*data.OrderLimit); err != nil {
+			return err
+		}
+	}
+	if data.LoanDays != nil {
+		if err := runtimeConfig.SetLoanDays(*data.LoanDays); err != nil {
+			return err
+		}
+	}
+	if data.MinDailyLendRate != nil {
+		if err := runtimeConfig.SetMinDailyLendRate(*data.MinDailyLendRate); err != nil {
+			return err
+		}
+	}
+	if data.MinLoan != nil {
+		if err := runtimeConfig.SetMinLoan(*data.MinLoan); err != nil {
+			return err
+		}
+	}
+	if data.MaxLoan != nil {
+		if err := runtimeConfig.SetMaxLoan(*data.MaxLoan); err != nil {
+			return err
+		}
+	}
+	if data.HighHoldRate != nil {
+		if err := runtimeConfig.SetHighHoldRate(*data.HighHoldRate); err != nil {
+			return err
+		}
+	}
+	if data.HighHoldAmount != nil {
+		if err := runtimeConfig.SetHighHoldAmount(*data.HighHoldAmount); err != nil {
+			return err
+		}
+	}
+	if data.HighHoldOrders != nil {
+		if err := runtimeConfig.SetHighHoldOrders(*data.HighHoldOrders); err != nil {
+			return err
+		}
+	}
+	if data.RateRangeIncreasePercent != nil {
+		if err := runtimeConfig.SetRateRangeIncreasePercent(*data.RateRangeIncreasePercent); err != nil {
+			return err
+		}
+	}
+	if data.Strategy != nil {
+		if err := runtimeConfig.SetStrategy(*data.Strategy); err != nil {
+			return err
+		}
+	}
+	if data.KlineSmoothMethod != nil {
+		if err := runtimeConfig.SetKlineSmoothMethod(*data.KlineSmoothMethod); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (b *Bot) saveRuntimeConfig() error {
+	if b.dataFilePath == "" {
+		return nil
+	}
+
+	snapshot := b.ensureRuntimeConfig().Snapshot()
+	minDailyLendRate := snapshot.GetMinDailyRateDisplay()
+
+	return storage.UpdateData(b.dataFilePath, func(state *storage.Data) {
+		state.RuntimeConfig = storage.RuntimeConfigData{
+			NotifyRateThreshold:      float64Ptr(snapshot.NotifyRateThreshold),
+			ReserveAmount:            float64Ptr(snapshot.ReserveAmount),
+			OrderLimit:               intPtr(snapshot.OrderLimit),
+			LoanDays:                 intPtr(snapshot.LoanDays),
+			MinDailyLendRate:         stringPtr(minDailyLendRate),
+			MinLoan:                  float64Ptr(snapshot.MinLoan),
+			MaxLoan:                  float64Ptr(snapshot.MaxLoan),
+			HighHoldRate:             float64Ptr(snapshot.HighHoldRate),
+			HighHoldAmount:           float64Ptr(snapshot.HighHoldAmount),
+			HighHoldOrders:           intPtr(snapshot.HighHoldOrders),
+			RateRangeIncreasePercent: float64Ptr(snapshot.RateRangeIncreasePercent),
+			Strategy:                 stringPtr(snapshot.GetStrategy()),
+			KlineSmoothMethod:        stringPtr(snapshot.KlineSmoothMethod),
+		}
+	})
+}
+
+func (b *Bot) updateRuntimeConfig(update func(*config.RuntimeConfigService) error) error {
+	runtimeConfig := b.ensureRuntimeConfig()
+	if err := update(runtimeConfig); err != nil {
+		return err
+	}
+	return b.saveRuntimeConfig()
+}
+
+func float64Ptr(v float64) *float64 {
+	return &v
+}
+
+func intPtr(v int) *int {
+	return &v
+}
+
+func stringPtr(v string) *string {
+	return &v
 }
 
 // sendMessage 发送消息
@@ -390,6 +541,10 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 		b.handleCheck(chatID)
 	case text == "/status":
 		b.handleStatus(chatID)
+	case text == "/configsummary":
+		b.handleConfigSummary(chatID)
+	case text == "/decisionsummary":
+		b.handleDecisionSummary(chatID)
 	case text == "/threshold" || strings.HasPrefix(text, "/threshold "):
 		b.handleSetThreshold(chatID, text)
 	case text == "/reserve" || strings.HasPrefix(text, "/reserve "):
@@ -448,6 +603,8 @@ func (b *Bot) handleHelp(chatID int64) {
 /check - 检查贷出利率是否超过阈值
 /status - 显示系统状态
 /strategy - 显示当前策略状态
+/configsummary - 显示运行配置摘要
+/decisionsummary - 显示最近一次策略决策摘要
 /lending - 查看当前活跃的借贷订单
 /offers - 查看当前未成交订单（含程序追踪标记）
 
@@ -479,7 +636,8 @@ func (b *Bot) handleHelp(chatID int64) {
 /canceloffers [all] - 取消未成交订单，默认仅取消程序追踪订单；加 all 取消全部
 /help - 显示此帮助消息
 
-💡 当前只会启用一种策略，由 STRATEGY 决定`
+💡 当前只会启用一种策略，由 STRATEGY 决定
+💡 上述设置指令仅覆盖允许运行时修改的参数；API 凭证、调度周期、Funding Book 边界等参数仍按启动配置生效`
 
 	b.sendMessage(chatID, helpText)
 }

@@ -9,6 +9,165 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
 )
 
+func getFundingBookIndexRange(cfg *config.Config, fundingBook []*bitfinex.FundingBookEntry) (int, int) {
+	if len(fundingBook) == 0 {
+		return 0, 0
+	}
+
+	maxIndex := len(fundingBook) - 1
+	bottom := 0
+	top := maxIndex
+
+	if cfg == nil || cfg.GapTop <= cfg.GapBottom || cfg.GapTop <= 0 {
+		return bottom, top
+	}
+
+	if cfg.GapBottom > 0 {
+		bottom = int(math.Floor(cfg.GapBottom))
+	}
+	if cfg.GapTop > 0 {
+		top = int(math.Floor(cfg.GapTop))
+	}
+
+	if bottom < 0 {
+		bottom = 0
+	}
+	if top < 0 {
+		top = 0
+	}
+	if bottom > maxIndex {
+		bottom = maxIndex
+	}
+	if top > maxIndex {
+		top = maxIndex
+	}
+	if top < bottom {
+		top = bottom
+	}
+
+	return bottom, top
+}
+
+func buildDepthSampleIndexes(cfg *config.Config, fundingBook []*bitfinex.FundingBookEntry, totalOrders int) []int {
+	if len(fundingBook) == 0 || totalOrders <= 0 {
+		return nil
+	}
+
+	bottom, top := getFundingBookIndexRange(cfg, fundingBook)
+	indexes := make([]int, 0, totalOrders)
+	if totalOrders == 1 || top == bottom {
+		for i := 0; i < totalOrders; i++ {
+			indexes = append(indexes, bottom)
+		}
+		return indexes
+	}
+
+	rangeWidth := top - bottom
+	for i := 0; i < totalOrders; i++ {
+		position := float64(i) * float64(rangeWidth) / float64(totalOrders-1)
+		index := bottom + int(math.Round(position))
+		if index < bottom {
+			index = bottom
+		}
+		if index > top {
+			index = top
+		}
+		indexes = append(indexes, index)
+	}
+
+	return indexes
+}
+
+func buildTraditionalDepthProgressionIndexes(cfg *config.Config, fundingBook []*bitfinex.FundingBookEntry, totalOrders int) []int {
+	if len(fundingBook) == 0 || totalOrders <= 0 {
+		return nil
+	}
+
+	bottom, top := getFundingBookIndexRange(cfg, fundingBook)
+	indexes := make([]int, 0, totalOrders)
+	if totalOrders == 1 || top == bottom {
+		for i := 0; i < totalOrders; i++ {
+			indexes = append(indexes, bottom)
+		}
+		return indexes
+	}
+
+	rangeWidth := top - bottom
+	for i := 0; i < totalOrders; i++ {
+		position := float64(i) / float64(totalOrders-1)
+		index := bottom + int(math.Floor(position*float64(rangeWidth)))
+		if i == totalOrders-1 {
+			index = top
+		}
+		if index < bottom {
+			index = bottom
+		}
+		if index > top {
+			index = top
+		}
+		indexes = append(indexes, index)
+	}
+
+	return indexes
+}
+
+func selectFundingBookEntriesByIndexes(fundingBook []*bitfinex.FundingBookEntry, indexes []int) []*bitfinex.FundingBookEntry {
+	if len(fundingBook) == 0 || len(indexes) == 0 {
+		return nil
+	}
+
+	selected := make([]*bitfinex.FundingBookEntry, 0, len(indexes))
+	for _, index := range indexes {
+		if index < 0 || index >= len(fundingBook) {
+			continue
+		}
+		selected = append(selected, fundingBook[index])
+	}
+
+	return selected
+}
+
+func selectFundingBookEntriesByRange(cfg *config.Config, fundingBook []*bitfinex.FundingBookEntry) []*bitfinex.FundingBookEntry {
+	if len(fundingBook) == 0 {
+		return nil
+	}
+
+	bottom, top := getFundingBookIndexRange(cfg, fundingBook)
+	selected := make([]*bitfinex.FundingBookEntry, 0, top-bottom+1)
+	for index := bottom; index <= top; index++ {
+		if index < 0 || index >= len(fundingBook) {
+			continue
+		}
+		selected = append(selected, fundingBook[index])
+	}
+	return selected
+}
+
+func getSafeDepthIndex(indexes []int, orderIndex int) int {
+	if len(indexes) == 0 {
+		return 0
+	}
+	if orderIndex < 0 {
+		return indexes[0]
+	}
+	if orderIndex >= len(indexes) {
+		return indexes[len(indexes)-1]
+	}
+	return indexes[orderIndex]
+}
+
+func selectFundingBookEntryByOrder(indexes []int, fundingBook []*bitfinex.FundingBookEntry, orderIndex int) (*bitfinex.FundingBookEntry, int) {
+	if len(fundingBook) == 0 || len(indexes) == 0 {
+		return nil, 0
+	}
+
+	depthIndex := getSafeDepthIndex(indexes, orderIndex)
+	if depthIndex < 0 || depthIndex >= len(fundingBook) {
+		return nil, depthIndex
+	}
+	return fundingBook[depthIndex], depthIndex
+}
+
 func calculateOptimalAllocation(cfg *config.Config, condition *MarketCondition) (highHoldRatio, spreadRatio float64) {
 	baseHighHold := 0.5
 

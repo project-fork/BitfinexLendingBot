@@ -1,6 +1,7 @@
 package strategy
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"os"
@@ -46,20 +47,25 @@ func (ss *SimpleStrategy) CalculateOffers(fundsAvailable float64, fundingBook []
 		return loanOffers
 	}
 
-	if len(fundingBook) > 0 {
-		currentRate := fundingBook[0].Rate
-		totalVolume := calculateTotalVolume(fundingBook)
+	analysisBook := selectFundingBookEntriesByRange(ss.config, fundingBook)
+	if len(analysisBook) == 0 {
+		analysisBook = fundingBook
+	}
+
+	if len(analysisBook) > 0 {
+		currentRate := analysisBook[0].Rate
+		totalVolume := calculateTotalVolume(analysisBook)
 		ss.analyzer.AddRateSnapshot(currentRate, totalVolume)
 	}
 
-	marketCondition := ss.analyzer.AnalyzeMarket(fundingBook)
+	marketCondition := ss.analyzer.AnalyzeMarket(analysisBook)
 	ss.getLogger().Printf("简单策略市场状况 - 趋势: %s, 波动率: %.6f, 利率比例: %.2f",
 		marketCondition.Trend, marketCondition.Volatility, marketCondition.RateRatio)
 
 	splitFundsAvailable := fundsAvailable
 
 	if ss.config.HighHoldAmount > ss.config.MinLoan || splitFundsAvailable >= ss.config.MinLoan {
-		highHoldOffers := ss.calculateHighHoldOffers(&splitFundsAvailable, marketCondition, fundingBook)
+		highHoldOffers := ss.calculateHighHoldOffers(&splitFundsAvailable, marketCondition, analysisBook)
 		loanOffers = append(loanOffers, highHoldOffers...)
 	}
 
@@ -71,7 +77,7 @@ func (ss *SimpleStrategy) CalculateOffers(fundsAvailable float64, fundingBook []
 	if splitFundsAvailable >= ss.config.MinLoan {
 		remainingSlots := getRemainingOrderSlots(ss.config.OrderLimit, len(loanOffers))
 		if remainingSlots != 0 {
-			spreadOffers := ss.calculateSpreadOffers(splitFundsAvailable, fundingBook, marketCondition, remainingSlots)
+			spreadOffers := ss.calculateSpreadOffers(splitFundsAvailable, fundingBook, analysisBook, marketCondition, remainingSlots)
 			loanOffers = append(loanOffers, spreadOffers...)
 		}
 	}
@@ -119,6 +125,12 @@ func (ss *SimpleStrategy) calculateHighHoldOffers(splitFundsAvailable *float64, 
 			Rate:   dynamicRate,
 			Period: period,
 			UseFRR: false,
+			Reason: LoanOfferReason{
+				FundSource:   "简单策略高额持有额度",
+				DepthSource:  "不使用 Funding Book 深度",
+				RateSource:   "简单策略动态高额持有利率",
+				PeriodSource: "简单策略智能期限决策",
+			},
 		}
 		offers = append(offers, offer)
 		*splitFundsAvailable -= highHold
@@ -127,7 +139,7 @@ func (ss *SimpleStrategy) calculateHighHoldOffers(splitFundsAvailable *float64, 
 	return offers
 }
 
-func (ss *SimpleStrategy) calculateSpreadOffers(splitFundsAvailable float64, fundingBook []*bitfinex.FundingBookEntry, condition *MarketCondition, maxOrders int) []*LoanOffer {
+func (ss *SimpleStrategy) calculateSpreadOffers(splitFundsAvailable float64, fundingBook []*bitfinex.FundingBookEntry, analysisBook []*bitfinex.FundingBookEntry, condition *MarketCondition, maxOrders int) []*LoanOffer {
 	var offers []*LoanOffer
 	useFRR := ss.config.IsMinDailyLendRateFRR()
 
@@ -148,36 +160,30 @@ func (ss *SimpleStrategy) calculateSpreadOffers(splitFundsAvailable float64, fun
 		return offers
 	}
 
-	gapBottom, gapTop := ss.analyzer.GetOptimalDepthRange(splitFundsAvailable, condition)
 	minDailyRate := ss.config.GetMinDailyRateDecimal()
+	depthIndexes := buildDepthSampleIndexes(ss.config, fundingBook, len(orderAmounts))
+	if len(analysisBook) == 0 {
+		analysisBook = fundingBook
+	}
+	rangeBottom, rangeTop := getFundingBookIndexRange(ss.config, fundingBook)
 
-	ss.getLogger().Printf("简单策略分散策略 - 实际分散笔数: %d, 深度范围: %.0f-%.0f, Funding Book数据: %d笔",
-		len(orderAmounts), gapBottom, gapTop, len(fundingBook))
+	ss.getLogger().Printf("简单策略分散策略 - 实际分散笔数: %d, 配置索引范围: %d-%d, Funding Book数据: %d笔",
+		len(orderAmounts), rangeBottom, rangeTop, len(fundingBook))
 
 	orderIndex := 0
 	totalOriginalSplits := len(orderAmounts)
 
 	for _, allocAmount := range orderAmounts {
-		currentDepthIndex := orderIndex
-		if len(fundingBook) > 0 {
-			if totalOriginalSplits > 1 {
-				currentDepthIndex = (orderIndex * (len(fundingBook) - 1)) / (totalOriginalSplits - 1)
-			} else {
-				currentDepthIndex = 0
-			}
-			if currentDepthIndex >= len(fundingBook) {
-				currentDepthIndex = len(fundingBook) - 1
-			}
-			if currentDepthIndex < 0 {
-				currentDepthIndex = 0
-			}
+		currentDepthIndex := 0
+		if len(depthIndexes) > orderIndex {
+			currentDepthIndex = depthIndexes[orderIndex]
 		}
 
 		if allocAmount < ss.config.MinLoan {
 			break
 		}
 
-		rate := calculateProgressiveRate(ss.getLogger(), ss.config, fundingBook, minDailyRate, condition, orderIndex, totalOriginalSplits)
+		rate := calculateProgressiveRate(ss.getLogger(), ss.config, analysisBook, minDailyRate, condition, orderIndex, totalOriginalSplits)
 		period := calculateSmartPeriod(ss.config, rate, condition)
 
 		offer := &LoanOffer{
@@ -185,6 +191,12 @@ func (ss *SimpleStrategy) calculateSpreadOffers(splitFundsAvailable float64, fun
 			Rate:   rate,
 			Period: period,
 			UseFRR: useFRR,
+			Reason: LoanOfferReason{
+				FundSource:   fmt.Sprintf("简单策略分散资金，第 %d 笔", len(offers)+1),
+				DepthSource:  describeDepthSource(fundingBook, currentDepthIndex),
+				RateSource:   "简单策略递增利率计算",
+				PeriodSource: "简单策略智能期限决策",
+			},
 		}
 		offers = append(offers, offer)
 

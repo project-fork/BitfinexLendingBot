@@ -477,3 +477,91 @@ func TestSmartStrategy_CalculateSmartOffers_RequiresAllocationToEnableHighHold(t
 		t.Fatalf("expected no full-balance high hold order, got %.2f", offers[0].Amount)
 	}
 }
+
+func TestSmartStrategy_CalculateSmartOffers_UsesConfiguredGapIndexRange(t *testing.T) {
+	cfg := &config.Config{
+		MinLoan:          150.0,
+		MaxLoan:          1000.0,
+		SpreadLend:       2,
+		GapBottom:        2,
+		GapTop:           3,
+		HighHoldAmount:   0,
+		HighHoldOrders:   1,
+		HighHoldRate:     0.1,
+		MinDailyLendRate: 0.02,
+		LoanPeriodThresholds: map[int]float64{
+			30:  0.04,
+			120: 0.045,
+		},
+		Strategy:                 config.StrategySmart,
+		VolatilityThreshold:      0.002,
+		MaxRateMultiplier:        2.0,
+		MinRateMultiplier:        0.8,
+		FundingBookRateUndercut:  0,
+		RateRangeIncreasePercent: 0.2,
+	}
+
+	strategy := NewSmartStrategy(cfg)
+	fundingBook := []*bitfinex.FundingBookEntry{
+		{Rate: 0.0003, Amount: 1000},
+		{Rate: 0.0004, Amount: 1200},
+		{Rate: 0.0005, Amount: 1500},
+		{Rate: 0.0006, Amount: 1800},
+	}
+
+	offers := strategy.CalculateSmartOffers(400.0, fundingBook)
+	if len(offers) != 2 {
+		t.Fatalf("expected 2 offers, got %d", len(offers))
+	}
+
+	if offers[0].Rate != 0.0005 {
+		t.Fatalf("expected first sampled rate 0.0005 from index range, got %.8f", offers[0].Rate)
+	}
+	if offers[1].Rate != 0.0006 {
+		t.Fatalf("expected second sampled rate 0.0006 from index range, got %.8f", offers[1].Rate)
+	}
+}
+
+func TestSmartStrategy_CalculateSmartOffers_AlignsDepthSourceWithSampledIndexes(t *testing.T) {
+	cfg := &config.Config{
+		MinLoan:          150.0,
+		MaxLoan:          1000.0,
+		SpreadLend:       2,
+		GapBottom:        2,
+		GapTop:           3,
+		HighHoldAmount:   0,
+		HighHoldOrders:   1,
+		HighHoldRate:     0.1,
+		MinDailyLendRate: 0.02,
+		LoanPeriodThresholds: map[int]float64{
+			30:  0.04,
+			120: 0.045,
+		},
+		Strategy:                 config.StrategySmart,
+		VolatilityThreshold:      0.002,
+		MaxRateMultiplier:        2.0,
+		MinRateMultiplier:        0.8,
+		FundingBookRateUndercut:  0,
+		RateRangeIncreasePercent: 0.2,
+	}
+
+	strategy := NewSmartStrategy(cfg)
+	fundingBook := []*bitfinex.FundingBookEntry{
+		{Rate: 0.0003, Amount: 1000},
+		{Rate: 0.0004, Amount: 1200},
+		{Rate: 0.0005, Amount: 1500},
+		{Rate: 0.0006, Amount: 1800},
+	}
+
+	offers := strategy.CalculateSmartOffers(400.0, fundingBook)
+	if len(offers) != 2 {
+		t.Fatalf("expected 2 offers, got %d", len(offers))
+	}
+
+	if offers[0].Reason.DepthSource != "Funding Book 深度索引 2" {
+		t.Fatalf("expected first depth source to align with sampled index 2, got %q", offers[0].Reason.DepthSource)
+	}
+	if offers[1].Reason.DepthSource != "Funding Book 深度索引 3" {
+		t.Fatalf("expected second depth source to align with sampled index 3, got %q", offers[1].Reason.DepthSource)
+	}
+}

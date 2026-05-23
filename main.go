@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -43,6 +45,8 @@ type Application struct {
 	mainTaskRunning  bool
 }
 
+var errMainTaskAlreadyRunning = errors.New("main task already running")
+
 // NewApplication 创建新的应用程序实例
 func NewApplication(configPath string) (*Application, error) {
 	// 载入配置
@@ -54,10 +58,14 @@ func NewApplication(configPath string) (*Application, error) {
 	// 创建 Bitfinex 客户端
 	bfxClient := bitfinex.NewClient(cfg.BitfinexApiKey, cfg.BitfinexSecretKey)
 
-	// 创建 Telegram 机器人
-	telegramBot, err := telegram.NewBot(cfg, bfxClient)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create telegram bot: %w", err)
+	var telegramBot *telegram.Bot
+	if cfg.IsTelegramEnabled() {
+		telegramBot, err = telegram.NewBot(cfg, bfxClient)
+		if err != nil {
+			log.Printf("⚠️ Telegram 初始化失败，已降级为禁用模式: %v", err)
+		}
+	} else {
+		log.Printf("ℹ️ Telegram 已禁用: %s", cfg.TelegramDisabledReason())
 	}
 
 	// 创建贷出机器人
@@ -83,18 +91,15 @@ func NewApplication(configPath string) (*Application, error) {
 		cancel:         cancel,
 	}
 
-	telegramBot.SetLogger(app.telegramLogger)
 	lendingBot.SetLogger(app.mainLogger)
 
-	// 设置 Telegram bot 控制回调
-	telegramBot.SetRestartCallback(app.handleRestart)
-	telegramBot.SetRunCallback(app.handleRun)
-
-	// 设置借贷机器人的通知回调
-	lendingBot.SetNotifyCallback(telegramBot.SendNotification)
-
-	// 设置 Telegram bot 的借贷机器人引用
-	telegramBot.SetLendingBot(lendingBot)
+	if telegramBot != nil {
+		telegramBot.SetLogger(app.telegramLogger)
+		telegramBot.SetRestartCallback(app.handleRestart)
+		telegramBot.SetRunCallback(app.handleRun)
+		telegramBot.SetLendingBot(lendingBot)
+		lendingBot.SetNotifyCallback(telegramBot.SendNotification)
+	}
 
 	return app, nil
 }
@@ -110,6 +115,8 @@ func (app *Application) Run() error {
 		log.Println("🚀 === 正式模式启动 ===")
 		log.Println("🚀 将执行真实的交易操作")
 	}
+
+	app.logStartupSelfCheck()
 
 	// 设置信号处理
 	sigChan := make(chan os.Signal, 1)
@@ -139,14 +146,139 @@ func (app *Application) Run() error {
 	return app.shutdown()
 }
 
+func (app *Application) logStartupSelfCheck() {
+	if app == nil || app.config == nil {
+		return
+	}
+
+	log.Println("🔎 === 启动自检摘要 ===")
+	log.Printf("📌 Funding Symbol: %s", app.config.GetFundingSymbol())
+	log.Printf("📌 策略模式: %s", describeStrategyMode(app.config))
+	log.Printf("📌 执行模式: %s", describeRunMode(app.config))
+	log.Printf("📌 最低日利率: %s", app.config.GetMinDailyRateDisplay())
+	log.Printf("📌 借贷天数: %s", describeLoanDays(app.config))
+	log.Printf("📌 单次下单限制: %s", describeOrderLimit(app.config))
+	log.Printf("📌 Telegram 状态: %s", describeTelegramStartupState(app))
+	log.Printf("📌 通知格式: %s", describeNotificationFormat(app.config))
+
+	for _, warning := range collectStartupWarnings(app) {
+		log.Printf("⚠️ %s", warning)
+	}
+
+	log.Println("🔎 === 启动自检结束 ===")
+}
+
+func describeStrategyMode(cfg *config.Config) string {
+	if cfg == nil {
+		return "未知"
+	}
+
+	switch cfg.GetStrategy() {
+	case config.StrategyKline:
+		return fmt.Sprintf("kline（%s / %d 根 / 平滑=%s）", cfg.KlineTimeFrame, cfg.KlinePeriod, cfg.KlineSmoothMethod)
+	case config.StrategySimple:
+		return "simple"
+	case config.StrategySmart:
+		return "smart"
+	default:
+		return "traditional"
+	}
+}
+
+func describeRunMode(cfg *config.Config) string {
+	if cfg == nil {
+		return "未知"
+	}
+	if cfg.RunOnlyOnNewCredits {
+		return "触发条件执行（新借贷订单或余额变化）"
+	}
+	return fmt.Sprintf("定时执行（每 %d 分钟）", cfg.MinutesRun)
+}
+
+func describeLoanDays(cfg *config.Config) string {
+	if cfg == nil {
+		return "未知"
+	}
+	if cfg.LoanDays == 0 {
+		return "自动判断"
+	}
+	return fmt.Sprintf("%d 天", cfg.LoanDays)
+}
+
+func describeOrderLimit(cfg *config.Config) string {
+	if cfg == nil {
+		return "未知"
+	}
+	if cfg.OrderLimit == 0 {
+		return "不限制"
+	}
+	return fmt.Sprintf("%d", cfg.OrderLimit)
+}
+
+func describeNotificationFormat(cfg *config.Config) string {
+	if cfg == nil {
+		return "未知"
+	}
+	if strings.TrimSpace(cfg.NotificationFormat) == "" {
+		return "classic"
+	}
+	return cfg.NotificationFormat
+}
+
+func describeTelegramStartupState(app *Application) string {
+	if app == nil || app.config == nil {
+		return "未知"
+	}
+	if app.telegramBot != nil {
+		return "已启用"
+	}
+	return "已禁用（" + app.config.TelegramDisabledReason() + "）"
+}
+
+func collectStartupWarnings(app *Application) []string {
+	if app == nil || app.config == nil {
+		return nil
+	}
+
+	warnings := make([]string, 0)
+	cfg := app.config
+
+	if !cfg.TestMode {
+		warnings = append(warnings, "当前为正式模式，下单和取消操作都会真实生效")
+	}
+	if app.telegramBot == nil {
+		warnings = append(warnings, "Telegram 控制与通知不可用，运行期无法远程查看状态或改参")
+	}
+	if cfg.OrderLimit == 0 {
+		warnings = append(warnings, "ORDER_LIMIT=0，单次执行下单数量不受限制，请确认这是预期行为")
+	}
+	if cfg.ReserveAmount > 0 {
+		warnings = append(warnings, fmt.Sprintf("已启用保留金额 %.2f %s，实际参与放贷的可用余额会先扣减这部分金额", cfg.ReserveAmount, strings.ToUpper(cfg.Currency)))
+	}
+	if cfg.IsMinDailyLendRateFRR() {
+		warnings = append(warnings, "MIN_DAILY_LEND_RATE 当前为 FRR 模式，分散单会按 FRR 逻辑报价")
+	}
+	if cfg.HighHoldAmount <= 0 {
+		warnings = append(warnings, "高额持有策略当前等同关闭，将主要依赖分散单策略")
+	}
+	if cfg.IsKlineStrategy() {
+		warnings = append(warnings, "K 线策略依赖 Bitfinex Candles 数据，若 K 线请求失败，本轮会直接中止下单")
+	} else {
+		warnings = append(warnings, "当前策略依赖 Funding Book 定价，若 Funding Book 请求失败，本轮会直接中止下单")
+	}
+
+	return warnings
+}
+
 // startWorkers 启动所有工作 goroutines
 func (app *Application) startWorkers() {
-	// 启动 Telegram 机器人
-	app.wg.Add(1)
-	go app.runWorker("TelegramBot", func() {
-		defer app.wg.Done()
-		app.telegramBot.StartWithContext(app.ctx)
-	})
+	if app.telegramBot != nil {
+		app.wg.Add(1)
+		go app.runWorker("TelegramBot", func() {
+			defer app.wg.Done()
+			app.telegramBot.StartWithContext(app.ctx)
+		})
+	}
 
 	// 启动每小时利率检查
 	app.wg.Add(1)
@@ -267,24 +399,60 @@ func (app *Application) scheduleMainTask() {
 
 // executeMainTask 执行主要任务
 func (app *Application) executeMainTask(trigger string) {
+	if !app.beginMainTask(trigger) {
+		return
+	}
+	defer app.endMainTask()
+	app.executeMainTaskBody(trigger, false)
+}
+
+func (app *Application) beginMainTask(trigger string) bool {
 	app.mainTaskMu.Lock()
+	if app.mainTaskRunning {
+		app.mainTaskMu.Unlock()
+		app.mainLogger.Printf("⏭️ 跳过主策略执行，已有任务运行中，触发来源: %s", trigger)
+		return false
+	}
 	app.mainTaskRunCount++
 	runID := app.mainTaskRunCount
 	app.mainTaskRunning = true
 	app.mainTaskMu.Unlock()
-	defer func() {
-		app.mainTaskMu.Lock()
-		app.mainTaskRunning = false
-		app.mainTaskMu.Unlock()
-	}()
 
 	app.mainLogger.Println("============================================================")
 	app.mainLogger.Printf("🔁 开始重跑主策略 #%d", runID)
 	app.mainLogger.Printf("📍 触发来源: %s", trigger)
 	app.mainLogger.Printf("🕒 触发时间: %s", time.Now().Format("2006-01-02 15:04:05"))
 	app.mainLogger.Println("============================================================")
+	return true
+}
 
-	if err := app.lendingBot.Execute(); err != nil {
+func (app *Application) endMainTask() {
+	app.mainTaskMu.Lock()
+	app.mainTaskRunning = false
+	app.mainTaskMu.Unlock()
+}
+
+func (app *Application) executeMainTaskBody(trigger string, cancelTrackedOffers bool) {
+	app.mainTaskMu.Lock()
+	runID := app.mainTaskRunCount
+	app.mainTaskMu.Unlock()
+
+	var err error
+	if cancelTrackedOffers {
+		if strings.Contains(trigger, "手动触发") {
+			err = app.lendingBot.ExecuteManual(trigger, true)
+		} else {
+			err = app.lendingBot.ExecuteWithOfferCancellation()
+		}
+	} else {
+		if strings.Contains(trigger, "手动触发") {
+			err = app.lendingBot.ExecuteManual(trigger, false)
+		} else {
+			err = app.lendingBot.Execute()
+		}
+	}
+
+	if err != nil {
 		app.mainLogger.Printf("❌ 主策略 #%d 执行失败（触发来源: %s）: %v", runID, trigger, err)
 		app.mainLogger.Println("============================================================")
 		app.mainLogger.Printf("🔚 结束主策略 #%d（失败）", runID)
@@ -343,22 +511,39 @@ func (app *Application) checkRateThreshold() {
 		message := fmt.Sprintf("⚠️ 定时检查提醒: 最近1小时最高利率 %.4f%% 已超过阈值 %.4f%%\n\n📊 检查方式: 5分钟K线最近12根高点分析",
 			percentageRate, app.config.NotifyRateThreshold)
 
-		if err := app.telegramBot.SendNotification(message); err != nil {
-			app.hourlyLogger.Printf("发送 Telegram 通知失败: %v", err)
-		} else {
-			app.hourlyLogger.Printf("成功发送利率提醒")
-		}
+		app.sendTelegramNotification(app.hourlyLogger, "利率提醒", message)
 	} else {
 		app.hourlyLogger.Println("最近1小时最高利率低于阈值，无需发送通知")
 	}
+}
+
+func (app *Application) sendTelegramNotification(logger *log.Logger, notificationType string, message string) {
+	if logger == nil {
+		logger = log.Default()
+	}
+
+	if app.telegramBot == nil {
+		logger.Printf("Telegram 未启用，跳过%s发送", notificationType)
+		return
+	}
+
+	if err := app.telegramBot.SendNotification(message); err != nil {
+		logger.Printf("发送 Telegram %s失败: %v", notificationType, err)
+		return
+	}
+
+	logger.Printf("成功发送%s", notificationType)
 }
 
 // handleRestart 处理重启请求
 func (app *Application) handleRestart() error {
 	log.Println("收到重启请求，开始执行重启逻辑...")
 
-	// 执行主要任务（先取消程序追踪到的未成交订单）
-	app.executeMainTaskWithCancel("Telegram /restart 手动触发")
+	if !app.beginMainTask("Telegram /restart 手动触发") {
+		return errMainTaskAlreadyRunning
+	}
+	defer app.endMainTask()
+	app.executeMainTaskBody("Telegram /restart 手动触发", true)
 
 	log.Println("重启完成！")
 	return nil
@@ -368,41 +553,14 @@ func (app *Application) handleRestart() error {
 func (app *Application) handleRun() error {
 	log.Println("收到直接重跑请求，开始执行重跑逻辑...")
 
-	app.executeMainTask("Telegram /run 手动触发")
+	if !app.beginMainTask("Telegram /run 手动触发") {
+		return errMainTaskAlreadyRunning
+	}
+	defer app.endMainTask()
+	app.executeMainTaskBody("Telegram /run 手动触发", false)
 
 	log.Println("直接重跑完成！")
 	return nil
-}
-
-func (app *Application) executeMainTaskWithCancel(trigger string) {
-	app.mainTaskMu.Lock()
-	app.mainTaskRunCount++
-	runID := app.mainTaskRunCount
-	app.mainTaskRunning = true
-	app.mainTaskMu.Unlock()
-	defer func() {
-		app.mainTaskMu.Lock()
-		app.mainTaskRunning = false
-		app.mainTaskMu.Unlock()
-	}()
-
-	app.mainLogger.Println("============================================================")
-	app.mainLogger.Printf("🔁 开始重跑主策略 #%d", runID)
-	app.mainLogger.Printf("📍 触发来源: %s", trigger)
-	app.mainLogger.Printf("🕒 触发时间: %s", time.Now().Format("2006-01-02 15:04:05"))
-	app.mainLogger.Println("============================================================")
-
-	if err := app.lendingBot.ExecuteWithOfferCancellation(); err != nil {
-		app.mainLogger.Printf("❌ 主策略 #%d 执行失败（触发来源: %s）: %v", runID, trigger, err)
-		app.mainLogger.Println("============================================================")
-		app.mainLogger.Printf("🔚 结束主策略 #%d（失败）", runID)
-		app.mainLogger.Println("============================================================")
-		return
-	}
-
-	app.mainLogger.Println("============================================================")
-	app.mainLogger.Printf("✅ 结束主策略 #%d（成功）", runID)
-	app.mainLogger.Println("============================================================")
 }
 
 // scheduleLendingCheck 调度借贷订单检查

@@ -9,15 +9,17 @@ func TestBuildTelegramCommands_IncludesSupportedCommands(t *testing.T) {
 	commands := buildTelegramCommands()
 
 	required := map[string]string{
-		"help":           "帮助 | 显示帮助消息",
-		"status":         "查询 | 显示系统状态",
-		"strategy":       "查询 | 显示当前策略",
-		"lending":        "查询 | 查看活跃借贷",
-		"offers":         "查询 | 查看未成交订单",
-		"simplestrategy": "策略 | 切换简单策略",
-		"canceloffers":   "控制 | 取消未成交订单",
-		"restart":        "控制 | 取消追踪订单后重跑",
-		"run":            "控制 | 保留订单直接重跑",
+		"help":            "帮助 | 显示帮助消息",
+		"status":          "查询 | 显示系统状态",
+		"strategy":        "查询 | 显示当前策略",
+		"configsummary":   "查询 | 显示运行配置摘要",
+		"decisionsummary": "查询 | 显示最近一次策略决策摘要",
+		"lending":         "查询 | 查看活跃借贷",
+		"offers":          "查询 | 查看未成交订单",
+		"simplestrategy":  "策略 | 切换简单策略",
+		"canceloffers":    "控制 | 取消未成交订单",
+		"restart":         "控制 | 取消追踪订单后重跑",
+		"run":             "控制 | 保留订单直接重跑",
 	}
 
 	if len(commands) < len(required) {
@@ -48,6 +50,8 @@ func TestBuildTelegramCommands_UsesGroupedOrdering(t *testing.T) {
 		"check",
 		"status",
 		"strategy",
+		"configsummary",
+		"decisionsummary",
 		"lending",
 		"offers",
 	}

@@ -34,6 +34,28 @@ func TestConfig_Validate(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "valid config without telegram",
+			config: Config{
+				BitfinexApiKey:           "test_api_key",
+				BitfinexSecretKey:        "test_secret_key",
+				Strategy:                 StrategySmart,
+				Currency:                 "USD",
+				MinLoan:                  150.0,
+				MaxLoan:                  1000.0,
+				LoanDays:                 30,
+				MinDailyLendRate:         0.02,
+				SpreadLend:               30,
+				GapBottom:                10,
+				GapTop:                   5000,
+				VolatilityThreshold:      0.002,
+				MaxRateMultiplier:        2.0,
+				MinRateMultiplier:        0.8,
+				RateRangeIncreasePercent: 0.2,
+				LendingCheckMinutes:      10,
+			},
+			wantErr: false,
+		},
+		{
 			name: "valid config with FRR min daily rate",
 			config: Config{
 				BitfinexApiKey:           "test_api_key",
@@ -193,6 +215,32 @@ func TestConfig_Validate(t *testing.T) {
 				t.Errorf("Config.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestConfig_TelegramEnablementHelpers(t *testing.T) {
+	cfg := &Config{}
+	if cfg.IsTelegramEnabled() {
+		t.Fatal("expected telegram to be disabled when tokens are empty")
+	}
+	if got := cfg.TelegramDisabledReason(); got == "" {
+		t.Fatal("expected disabled reason when telegram is not configured")
+	}
+
+	cfg.TelegramBotToken = "bot-token"
+	if cfg.IsTelegramEnabled() {
+		t.Fatal("expected telegram to remain disabled when auth token is missing")
+	}
+	if got := cfg.TelegramDisabledReason(); got != "缺少 TELEGRAM_AUTH_TOKEN" {
+		t.Fatalf("unexpected disabled reason: %q", got)
+	}
+
+	cfg.TelegramAuthToken = "auth-token"
+	if !cfg.IsTelegramEnabled() {
+		t.Fatal("expected telegram to be enabled when both tokens exist")
+	}
+	if got := cfg.TelegramDisabledReason(); got != "" {
+		t.Fatalf("expected no disabled reason, got %q", got)
 	}
 }
 

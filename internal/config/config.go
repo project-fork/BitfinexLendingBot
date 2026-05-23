@@ -74,6 +74,11 @@ type Config struct {
 	LastAvailableBalance float64 // 上次检查时的可用余额
 	LendingCheckMinutes  int     `mapstructure:"LENDING_CHECK_MINUTES"` // 借贷订单检查间隔（分钟）
 	SeenFundingCreditIDs map[int64]struct{}
+
+	// 运行期风控保护
+	ExecutionCooldownSeconds int     `mapstructure:"EXECUTION_COOLDOWN_SECONDS"`    // 主策略执行冷却时间（秒）
+	MinExecutableFunds       float64 `mapstructure:"MIN_EXECUTABLE_FUNDS"`          // 本轮允许继续生成/提交订单的最小总资金阈值
+	OrderFingerprintTTL      int     `mapstructure:"ORDER_FINGERPRINT_TTL_SECONDS"` // 相同订单指纹的幂等保护窗口（秒）
 }
 
 // LoadConfig 从文件加载配置
@@ -211,6 +216,15 @@ func (c *Config) Validate() error {
 	if c.LendingCheckMinutes <= 0 {
 		return errors.NewValidationError("LENDING_CHECK_MINUTES must be positive")
 	}
+	if c.ExecutionCooldownSeconds < 0 {
+		return errors.NewValidationError("EXECUTION_COOLDOWN_SECONDS must be non-negative")
+	}
+	if c.MinExecutableFunds < 0 {
+		return errors.NewValidationError("MIN_EXECUTABLE_FUNDS must be non-negative")
+	}
+	if c.OrderFingerprintTTL < 0 {
+		return errors.NewValidationError("ORDER_FINGERPRINT_TTL_SECONDS must be non-negative")
+	}
 	if c.NotificationFormat != "" && c.NotificationFormat != "classic" && c.NotificationFormat != "aligned" {
 		return errors.NewValidationError("NOTIFICATION_FORMAT must be one of: classic, aligned")
 	}
@@ -256,6 +270,34 @@ func (c *Config) IsSmartStrategy() bool {
 
 func (c *Config) IsKlineStrategy() bool {
 	return c.GetStrategy() == StrategyKline
+}
+
+func (c *Config) HasTelegramBotToken() bool {
+	return strings.TrimSpace(c.TelegramBotToken) != ""
+}
+
+func (c *Config) HasTelegramAuthToken() bool {
+	return strings.TrimSpace(c.TelegramAuthToken) != ""
+}
+
+func (c *Config) IsTelegramEnabled() bool {
+	return c.HasTelegramBotToken() && c.HasTelegramAuthToken()
+}
+
+func (c *Config) TelegramDisabledReason() string {
+	hasBotToken := c.HasTelegramBotToken()
+	hasAuthToken := c.HasTelegramAuthToken()
+
+	switch {
+	case hasBotToken && hasAuthToken:
+		return ""
+	case !hasBotToken && !hasAuthToken:
+		return "未配置 TELEGRAM_BOT_TOKEN 和 TELEGRAM_AUTH_TOKEN"
+	case !hasBotToken:
+		return "缺少 TELEGRAM_BOT_TOKEN"
+	default:
+		return "缺少 TELEGRAM_AUTH_TOKEN"
+	}
 }
 
 func (c *Config) UsesAdaptiveStrategyParams() bool {
@@ -423,6 +465,12 @@ func (c *Config) setLendingCheckDefaults() {
 	// 如果未设置借贷检查间隔，默认为 10 分钟
 	if c.LendingCheckMinutes == 0 {
 		c.LendingCheckMinutes = 10
+	}
+	if c.ExecutionCooldownSeconds == 0 {
+		c.ExecutionCooldownSeconds = 30
+	}
+	if c.OrderFingerprintTTL == 0 {
+		c.OrderFingerprintTTL = 120
 	}
 	if c.NotificationFormat == "" {
 		c.NotificationFormat = "classic"

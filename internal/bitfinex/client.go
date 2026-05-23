@@ -2,11 +2,16 @@ package bitfinex
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/common"
 	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/fundingoffer"
@@ -16,21 +21,33 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/errors"
 )
 
+const (
+	bitfinexPublicAPIBaseURL = "https://api-pub.bitfinex.com/v2/"
+	bitfinexRequestTimeout   = 15 * time.Second
+)
+
 // Client Bitfinex API 客户端封装
 type Client struct {
 	restClient *rest.Client
+	httpClient *http.Client
+	baseURL    string
 }
 
 // NewClient 创建新的 Bitfinex 客户端
 func NewClient(apiKey, secretKey string) *Client {
+	httpClient := &http.Client{Timeout: bitfinexRequestTimeout}
 	nonceGenerator, err := newPersistentNonceGenerator(defaultNonceStateFilePath())
 	if err != nil {
 		nonceGenerator = nil
 	}
 
-	client := rest.NewClient()
+	httpDo := func(c *http.Client, req *http.Request) (*http.Response, error) {
+		return httpClient.Do(req)
+	}
+
+	client := rest.NewClientWithURLHttpDo(bitfinexPublicAPIBaseURL, httpDo)
 	if nonceGenerator != nil {
-		client = rest.NewClientWithURLNonce("https://api-pub.bitfinex.com/v2/", nonceGenerator)
+		client = rest.NewClientWithURLHttpDoNonce(bitfinexPublicAPIBaseURL, httpDo, nonceGenerator)
 	}
 	client = client.Credentials(apiKey, secretKey)
 
@@ -40,6 +57,8 @@ func NewClient(apiKey, secretKey string) *Client {
 
 	return &Client{
 		restClient: client,
+		httpClient: httpClient,
+		baseURL:    bitfinexPublicAPIBaseURL,
 	}
 }
 
@@ -130,7 +149,7 @@ func (c *Client) GetFundingOffers(symbol string) ([]*FundingOffer, error) {
 		if strings.Contains(err.Error(), "data slice too short for funding offer") {
 			return []*FundingOffer{}, nil
 		}
-		return nil, errors.NewAPIError("failed to get funding offers", err)
+		return nil, classifyBitfinexError("failed to get funding offers", err)
 	}
 
 	// 处理空响应或无数据的情况
@@ -211,7 +230,7 @@ func (c *Client) submitFundingOffer(symbol string, amount float64, dailyRate flo
 func (c *Client) GetWallets() ([]*Wallet, error) {
 	wallets, err := c.restClient.Wallet.Wallet()
 	if err != nil {
-		return nil, errors.NewAPIError("failed to get wallets", err)
+		return nil, classifyBitfinexError("failed to get wallets", err)
 	}
 
 	result := make([]*Wallet, 0, len(wallets.Snapshot))
@@ -254,7 +273,7 @@ func (c *Client) GetFundingBook(symbol string, limit int) ([]*FundingBookEntry, 
 
 	book, err := c.restClient.Book.All(symbol, common.PrecisionRawBook, limit)
 	if err != nil {
-		return nil, errors.NewAPIError("failed to get funding book", err)
+		return nil, classifyBitfinexError("failed to get funding book", err)
 	}
 
 	if len(book.Snapshot) == 0 {
@@ -271,46 +290,72 @@ func (c *Client) GetFundingBook(symbol string, limit int) ([]*FundingBookEntry, 
 		})
 	}
 
-	return result, nil
+	return normalizeFundingBookEntries(result), nil
+}
+
+func normalizeFundingBookEntries(entries []*FundingBookEntry) []*FundingBookEntry {
+	if len(entries) == 0 {
+		return []*FundingBookEntry{}
+	}
+
+	askSide := make([]*FundingBookEntry, 0, len(entries))
+	for _, entry := range entries {
+		if entry == nil {
+			continue
+		}
+		// Bitfinex funding raw book 中，Amount > 0 表示 ask 侧，机器人应只消费可贷出挂单侧。
+		if entry.Amount > 0 {
+			askSide = append(askSide, entry)
+		}
+	}
+
+	if len(askSide) == 0 {
+		askSide = append(askSide, entries...)
+	}
+
+	sort.SliceStable(askSide, func(i, j int) bool {
+		if askSide[i] == nil {
+			return false
+		}
+		if askSide[j] == nil {
+			return true
+		}
+		if askSide[i].Rate == askSide[j].Rate {
+			return askSide[i].Amount < askSide[j].Amount
+		}
+		return askSide[i].Rate < askSide[j].Rate
+	})
+
+	return askSide
 }
 
 // GetCurrentFundingRate 获取当前资金利率（Flash Return Rate）
 func (c *Client) GetCurrentFundingRate(symbol string) (float64, error) {
-	// 使用 ticker API 获取真正的当前 funding rate (FRR)
-	url := fmt.Sprintf("https://api-pub.bitfinex.com/v2/ticker/%s", symbol)
-
-	resp, err := http.Get(url)
+	resp, err := c.getPublic("ticker/"+symbol, nil)
 	if err != nil {
-		return 0, errors.NewAPIError("failed to get funding ticker", err)
+		return 0, err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return 0, errors.NewAPIError(fmt.Sprintf("API returned status code %d", resp.StatusCode), nil)
-	}
-
 	var tickerData []interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&tickerData); err != nil {
-		return 0, errors.NewAPIError("failed to decode ticker response", err)
+		return 0, errors.NewAPIDecodeError("failed to decode ticker response", err)
 	}
 
-	// 检查响应数据格式
 	if len(tickerData) < 1 {
-		return 0, errors.NewAPIError("invalid ticker response format", nil)
+		return 0, errors.NewAPIDecodeError("invalid ticker response format", nil)
 	}
 
-	// 对于 funding symbols，FRR (Flash Return Rate) 依官方文件在索引 0
 	if frr, ok := tickerData[0].(float64); ok {
 		return frr, nil
 	}
-	// 容错：若索引 0 不可解析，尝试索引 1
 	if len(tickerData) > 1 {
 		if frr, ok := tickerData[1].(float64); ok {
 			return frr, nil
 		}
 	}
 
-	return 0, errors.NewAPIError("failed to parse FRR from ticker", nil)
+	return 0, errors.NewAPIDecodeError("failed to parse FRR from ticker response", nil)
 }
 
 // GetFundingCredits 获取活跃的借贷订单
@@ -321,7 +366,7 @@ func (c *Client) GetFundingCredits(symbol string) ([]*FundingCredit, error) {
 		if strings.Contains(err.Error(), "data slice too short") {
 			return []*FundingCredit{}, nil
 		}
-		return nil, errors.NewAPIError("failed to get funding credits", err)
+		return nil, classifyBitfinexError("failed to get funding credits", err)
 	}
 
 	// 处理空响应或无数据的情况
@@ -354,27 +399,22 @@ func (c *Client) GetFundingCredits(symbol string) ([]*FundingCredit, error) {
 
 // GetFundingCandles 获取资金 K 线数据
 func (c *Client) GetFundingCandles(symbol string, timeFrame string, limit int) ([]*Candle, error) {
-	// 构建 candle key，格式: trade:15m:fUSD:a30:p2:p30
-	candleKey := fmt.Sprintf("trade:%s:%s:a30:p2:p30", timeFrame, symbol)
+	if limit <= 0 {
+		return []*Candle{}, nil
+	}
 
-	// 构建 API URL
-	url := fmt.Sprintf("https://api-pub.bitfinex.com/v2/candles/%s/hist?limit=%d", candleKey, limit)
-
-	// 发送 HTTP 请求
-	resp, err := http.Get(url)
+	resp, err := c.getPublic("candles/trade:"+timeFrame+":"+symbol+":a30:p2:p30/hist", map[string]string{
+		"limit": fmt.Sprintf("%d", limit),
+	})
 	if err != nil {
-		return nil, errors.NewAPIError("failed to get funding candles", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, errors.NewAPIError(fmt.Sprintf("API returned status code %d", resp.StatusCode), nil)
-	}
 
 	// 解析响应
 	var rawData [][]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&rawData); err != nil {
-		return nil, errors.NewAPIError("failed to decode candles response", err)
+		return nil, errors.NewAPIDecodeError("failed to decode candles response", err)
 	}
 
 	// 转换为 Candle 结构
@@ -427,6 +467,88 @@ func (c *Client) GetFundingCandles(symbol string, timeFrame string, limit int) (
 	}
 
 	return candles, nil
+}
+
+func (c *Client) getPublic(path string, query map[string]string) (*http.Response, error) {
+	baseURL := c.baseURL
+	if baseURL == "" {
+		baseURL = bitfinexPublicAPIBaseURL
+	}
+
+	url := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(path, "/")
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, errors.NewAPIError("failed to build public request", err)
+	}
+
+	if len(query) > 0 {
+		values := req.URL.Query()
+		for key, value := range query {
+			values.Set(key, value)
+		}
+		req.URL.RawQuery = values.Encode()
+	}
+
+	httpClient := c.httpClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: bitfinexRequestTimeout}
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, classifyBitfinexError("failed to execute public request", err)
+	}
+
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return resp, nil
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	_ = resp.Body.Close()
+	return nil, classifyBitfinexHTTPStatusError(path, resp.StatusCode, body)
+}
+
+func classifyBitfinexHTTPStatusError(path string, statusCode int, body []byte) error {
+	message := fmt.Sprintf("Bitfinex public API %s returned HTTP %d", path, statusCode)
+	if trimmed := strings.TrimSpace(string(body)); trimmed != "" {
+		message = fmt.Sprintf("%s: %s", message, trimmed)
+	}
+	if statusCode == http.StatusTooManyRequests {
+		return errors.NewRateLimitError(message, nil)
+	}
+	return errors.NewAPIHTTPStatusError(message, nil)
+}
+
+func classifyBitfinexError(message string, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var netErr net.Error
+	lowerErr := strings.ToLower(err.Error())
+	if strings.Contains(lowerErr, "rate limit") || strings.Contains(lowerErr, "ratelimit") || strings.Contains(lowerErr, "too many requests") {
+		return errors.NewRateLimitError(message, err)
+	}
+	if stderrors.As(err, &netErr) && netErr.Timeout() {
+		return errors.NewAPITimeoutError(message, err)
+	}
+	if stderrors.As(err, &netErr) && netErr.Temporary() {
+		return errors.NewAPIError(message, err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "context deadline exceeded") {
+		return errors.NewAPITimeoutError(message, err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "client.timeout exceeded") {
+		return errors.NewAPITimeoutError(message, err)
+	}
+	var errorResponse *rest.ErrorResponse
+	if stderrors.As(err, &errorResponse) {
+		if errorResponse.Response != nil && errorResponse.Response.Response != nil && errorResponse.Response.Response.StatusCode == http.StatusTooManyRequests {
+			return errors.NewRateLimitError(message, err)
+		}
+		return errors.NewAPIHTTPStatusError(message, err)
+	}
+	return errors.NewAPIError(message, err)
 }
 
 // extractIDFromStruct 使用反射从结构体中提取ID字段

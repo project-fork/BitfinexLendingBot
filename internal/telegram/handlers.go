@@ -142,6 +142,24 @@ func (b *Bot) handleStatus(chatID int64) {
 	b.sendMessage(chatID, statusMsg)
 }
 
+func (b *Bot) handleConfigSummary(chatID int64) {
+	if b.lendingBot == nil {
+		b.sendMessage(chatID, "❌ 借贷机器人未初始化")
+		return
+	}
+
+	b.sendMessage(chatID, b.lendingBot.BuildRuntimeConfigSummaryText())
+}
+
+func (b *Bot) handleDecisionSummary(chatID int64) {
+	if b.lendingBot == nil {
+		b.sendMessage(chatID, "❌ 借贷机器人未初始化")
+		return
+	}
+
+	b.sendMessage(chatID, b.lendingBot.BuildDecisionSummaryText())
+}
+
 // handlePendingOffers 处理未成交订单查询指令
 func (b *Bot) handlePendingOffers(chatID int64) {
 	if b.lendingBot == nil {
@@ -311,7 +329,12 @@ func (b *Bot) handleSetThreshold(chatID int64, text string) {
 		return
 	}
 
-	b.config.NotifyRateThreshold = threshold
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetNotifyRateThreshold(threshold)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	b.sendMessage(chatID, fmt.Sprintf("阈值已设定为: %.4f%%", threshold))
 }
 
@@ -333,7 +356,12 @@ func (b *Bot) handleSetReserve(chatID int64, text string) {
 		return
 	}
 
-	b.config.ReserveAmount = reserve
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetReserveAmount(reserve)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	b.sendMessage(chatID, fmt.Sprintf("保留金额已设定为: %.2f", reserve))
 }
 
@@ -355,7 +383,12 @@ func (b *Bot) handleSetOrderLimit(chatID int64, text string) {
 		return
 	}
 
-	b.config.OrderLimit = limit
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetOrderLimit(limit)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	b.sendMessage(chatID, fmt.Sprintf("单次执行最大下单数量限制已设定为: %d", limit))
 }
 
@@ -382,7 +415,12 @@ func (b *Bot) handleSetLoanDays(chatID int64, text string) {
 		return
 	}
 
-	b.config.LoanDays = days
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetLoanDays(days)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	if days == 0 {
 		b.sendMessage(chatID, "固定借贷天数已设为: 自动判断")
 		return
@@ -405,7 +443,12 @@ func (b *Bot) handleSetMinDailyRate(chatID int64, text string) {
 
 	input := strings.TrimSpace(parts[1])
 	if strings.EqualFold(input, constants.MinDailyRateModeFRR) {
-		b.config.MinDailyLendRate = constants.MinDailyRateModeFRR
+		if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+			return runtimeConfig.SetMinDailyLendRate(constants.MinDailyRateModeFRR)
+		}); err != nil {
+			b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+			return
+		}
 		b.sendMessage(chatID, "最低每日贷出利率已设定为: FRR（将使用 FRR 模式挂单）")
 		return
 	}
@@ -421,7 +464,12 @@ func (b *Bot) handleSetMinDailyRate(chatID int64, text string) {
 		return
 	}
 
-	b.config.MinDailyLendRate = rate
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetMinDailyLendRate(rate)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	b.sendMessage(chatID, fmt.Sprintf("最低每日贷出利率已设定为: %.4f%%", rate))
 }
 
@@ -449,7 +497,12 @@ func (b *Bot) handleSetMinLoan(chatID int64, text string) {
 		return
 	}
 
-	b.config.MinLoan = amount
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetMinLoan(amount)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	b.sendMessage(chatID, fmt.Sprintf("✅ 最小贷出金额已设定为: %.2f %s", amount, b.config.Currency))
 }
 
@@ -477,7 +530,12 @@ func (b *Bot) handleSetMaxLoan(chatID int64, text string) {
 		return
 	}
 
-	b.config.MaxLoan = amount
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetMaxLoan(amount)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 
 	if amount == 0 {
 		b.sendMessage(chatID, "✅ 最大贷出金额已设定为: 无限制")
@@ -509,7 +567,12 @@ func (b *Bot) handleSetHighHoldRate(chatID int64, text string) {
 		return
 	}
 
-	b.config.HighHoldRate = rate
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetHighHoldRate(rate)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	b.sendMessage(chatID, fmt.Sprintf("高额持有策略的日利率已设定为: %.4f%%", rate))
 }
 
@@ -531,7 +594,12 @@ func (b *Bot) handleSetHighHoldAmount(chatID int64, text string) {
 		return
 	}
 
-	b.config.HighHoldAmount = amount
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetHighHoldAmount(amount)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 
 	if amount == 0 {
 		b.sendMessage(chatID, "✅ 高额持有策略已关闭\n高额持有金额已设定为: 0.00")
@@ -558,7 +626,12 @@ func (b *Bot) handleSetHighHoldOrders(chatID int64, text string) {
 		return
 	}
 
-	b.config.HighHoldOrders = orders
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetHighHoldOrders(orders)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	b.sendMessage(chatID, fmt.Sprintf("高额持有订单数量已设定为: %d", orders))
 }
 
@@ -589,7 +662,12 @@ func (b *Bot) handleSetRateRangeIncrease(chatID int64, text string) {
 	// 转换为小数形式 (0-1.0)
 	decimalValue := percentage / 100.0
 
-	b.config.RateRangeIncreasePercent = decimalValue
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetRateRangeIncreasePercent(decimalValue)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	b.sendMessage(chatID, fmt.Sprintf("利率范围增加百分比已设定为: %.2f%% (%.4f)", percentage, decimalValue))
 }
 
@@ -882,11 +960,21 @@ func getStrategyStatus(enabled bool) string {
 func (b *Bot) handleToggleSimpleStrategy(chatID int64, enable bool) {
 	var message string
 	if enable {
-		b.config.SetStrategy(config.StrategySimple)
+		if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+			return runtimeConfig.SetStrategy(config.StrategySimple)
+		}); err != nil {
+			b.sendMessage(chatID, fmt.Sprintf("策略切换失败: %v", err))
+			return
+		}
 
 		message = "✅ 简单策略已启用\n\n简单策略特点:\n⚙️ 高额持有优先\n🔄 剩余资金补单\n📊 OrderLimit 联动控笔数\n📈 分散单支持 FRR\n\n下次执行时将使用简单策略"
 	} else {
-		b.config.SetStrategy(config.StrategyTraditional)
+		if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+			return runtimeConfig.SetStrategy(config.StrategyTraditional)
+		}); err != nil {
+			b.sendMessage(chatID, fmt.Sprintf("策略切换失败: %v", err))
+			return
+		}
 		message = "❌ 简单策略已停用\n\n已切换回传统策略\n\n下次执行时将使用传统策略"
 	}
 
@@ -897,11 +985,21 @@ func (b *Bot) handleToggleSimpleStrategy(chatID int64, enable bool) {
 func (b *Bot) handleToggleSmartStrategy(chatID int64, enable bool) {
 	var message string
 	if enable {
-		b.config.SetStrategy(config.StrategySmart)
+		if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+			return runtimeConfig.SetStrategy(config.StrategySmart)
+		}); err != nil {
+			b.sendMessage(chatID, fmt.Sprintf("策略切换失败: %v", err))
+			return
+		}
 
 		message = "✅ 智能策略已启用\n\n智能功能:\n🧠 动态利率调整\n📈 市场趋势分析\n⏰ 智能期间选择\n🏆 竞争对手分析\n💰 自适应资金配置\n\n下次执行时将使用智能策略"
 	} else {
-		b.config.SetStrategy(config.StrategyTraditional)
+		if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+			return runtimeConfig.SetStrategy(config.StrategyTraditional)
+		}); err != nil {
+			b.sendMessage(chatID, fmt.Sprintf("策略切换失败: %v", err))
+			return
+		}
 		message = "❌ 智能策略已停用\n\n已切换回传统策略\n\n下次执行时将使用传统策略"
 	}
 
@@ -912,7 +1010,12 @@ func (b *Bot) handleToggleSmartStrategy(chatID int64, enable bool) {
 func (b *Bot) handleToggleKlineStrategy(chatID int64, enable bool) {
 	var message string
 	if enable {
-		b.config.SetStrategy(config.StrategyKline)
+		if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+			return runtimeConfig.SetStrategy(config.StrategyKline)
+		}); err != nil {
+			b.sendMessage(chatID, fmt.Sprintf("策略切换失败: %v", err))
+			return
+		}
 
 		message = "✅ K线策略已启用\n\n📈 K线策略功能:\n🎯 基于真实市场K线数据\n📊 自动找寻最高利率\n💡 智能加成计算\n🔄 分散风险贷出\n🛡️ 自动回退机制\n\n"
 		message += fmt.Sprintf("⚙️ 当前设定:\n")
@@ -921,7 +1024,12 @@ func (b *Bot) handleToggleKlineStrategy(chatID int64, enable bool) {
 		message += fmt.Sprintf("加成百分比: %.1f%%\n", b.config.KlineSpreadPercent)
 		message += "\n下次执行时将使用K线策略"
 	} else {
-		b.config.SetStrategy(config.StrategyTraditional)
+		if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+			return runtimeConfig.SetStrategy(config.StrategyTraditional)
+		}); err != nil {
+			b.sendMessage(chatID, fmt.Sprintf("策略切换失败: %v", err))
+			return
+		}
 		message = "❌ K线策略已停用\n\n已切换回传统策略\n\n下次执行时将使用传统策略"
 	}
 
@@ -1059,7 +1167,12 @@ func (b *Bot) handleSetSmoothMethod(chatID int64, text string) {
 		return
 	}
 
-	b.config.KlineSmoothMethod = method
+	if err := b.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetKlineSmoothMethod(method)
+	}); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
+		return
+	}
 	b.sendMessage(chatID, fmt.Sprintf("✅ K线利率平滑方法已设定为: %s - %s\n\n下次执行K线策略时将使用新的平滑方法", method, description))
 }
 

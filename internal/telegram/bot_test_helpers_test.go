@@ -7,6 +7,6 @@ func NewBotWithDataFileForTest(dataFilePath string) *Bot {
 		rateConverter: rates.NewConverter(),
 		dataFilePath:  dataFilePath,
 	}
-	bot.loadAuthenticatedChatID()
+	bot.loadPersistentData()
 	return bot
 }

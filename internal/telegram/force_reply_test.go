@@ -13,15 +13,17 @@ import (
 func newForceReplyTestBot() (*Bot, *[]string, *[]tgbotapi.Chattable) {
 	messages := []string{}
 	chattables := []tgbotapi.Chattable{}
+	cfg := &config.Config{
+		Currency:         "USD",
+		MinLoan:          150,
+		MaxLoan:          0,
+		HighHoldOrders:   1,
+		MinDailyLendRate: 0.02,
+	}
 
 	bot := &Bot{
-		config: &config.Config{
-			Currency:         "USD",
-			MinLoan:          150,
-			MaxLoan:          0,
-			HighHoldOrders:   1,
-			MinDailyLendRate: 0.02,
-		},
+		config:        cfg,
+		runtimeConfig: config.NewRuntimeConfigService(cfg),
 		rateConverter: rates.NewConverter(),
 		sendMessageFunc: func(chatID int64, text string) error {
 			messages = append(messages, text)

@@ -5,10 +5,17 @@ BITFINEX_API_KEY:               ""                 # Bitfinex API Key；需要�
 BITFINEX_SECRET_KEY:            ""                 # Bitfinex API Secret；与 API Key 配套使用
 
 # =========================
-# Telegram 机器人
+# Telegram 机器人（可选）
 # =========================
-TELEGRAM_BOT_TOKEN:             ""                 # Telegram Bot Token；用于发送通知与接收命令
-TELEGRAM_AUTH_TOKEN:            ""                 # Telegram 鉴权口令；首次 /auth 时用于绑定授权用户
+TELEGRAM_BOT_TOKEN:             ""                 # Telegram Bot Token；与 TELEGRAM_AUTH_TOKEN 同时配置时启用 Telegram 控制与通知
+TELEGRAM_AUTH_TOKEN:            ""                 # Telegram 鉴权口令；与 TELEGRAM_BOT_TOKEN 同时配置时启用
+# 若任一 Telegram 配置缺失，程序会自动降级为无 Telegram 模式，但主策略仍会继续运行
+# 运行中通过 Telegram 修改的参数会写入 data.json，重启后优先恢复最近一次运行时修改值
+# 当前允许运行时修改的参数包括：
+# NOTIFY_RATE_THRESHOLD / RESERVE_AMOUNT / ORDER_LIMIT / LOAN_DAYS / MIN_DAILY_LEND_RATE
+# MIN_LOAN / MAX_LOAN / HIGH_HOLD_RATE / HIGH_HOLD_AMOUNT / HIGH_HOLD_ORDERS
+# RATE_RANGE_INCREASE_PERCENT / STRATEGY / KLINE_SMOOTH_METHOD
+# 其余参数默认按“仅启动时读取”处理
 
 # =========================
 # 通知设定
@@ -26,6 +33,9 @@ ORDER_LIMIT:                   5                    # 单次主流程最多提�
 RUN_ONLY_ON_NEW_CREDITS:       false                # 是否只在新借贷成交或余额显著增加时重跑主流程
 MINUTES_RUN:                   10                   # 主流程定时执行间隔（分钟）；仅在 RUN_ONLY_ON_NEW_CREDITS=false 时生效
 LENDING_CHECK_MINUTES:         5                    # 借贷检查调度间隔（分钟）；用于检测新成交、余额变化和发送借贷通知
+EXECUTION_COOLDOWN_SECONDS:    30                   # 主策略两次执行之间的最小冷却时间（秒）；防止短时间重复执行
+MIN_EXECUTABLE_FUNDS:          0                    # 最小可执行资金阈值；大于 0 时，低于该值的本轮执行会直接跳过
+ORDER_FINGERPRINT_TTL_SECONDS: 120                  # 相同订单指纹的短窗口幂等保护时长（秒）
 
 # =========================
 # 贷出金额控制
@@ -58,8 +68,8 @@ HIGH_HOLD_ORDERS:              1                   # 高额持有订单数量；
 # 传统策略深度参数
 # 仅 STRATEGY=traditional 时生效
 # =========================
-GAP_BOTTOM:                     10                 # Funding Book 深度下限；表示从第几个 ask 档位开始取价
-GAP_TOP:                        5000               # Funding Book 深度上限；表示最深参考到第几个 ask 档位
+GAP_BOTTOM:                     10                 # Funding Book 索引下限；表示从第几个单边 ask 档位开始取价
+GAP_TOP:                        5000               # Funding Book 索引上限；表示最深参考到第几个单边 ask 档位
 
 # =========================
 # simple / smart 共用参数

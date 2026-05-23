@@ -18,6 +18,8 @@ type stubLendingBot struct {
 	cancelSummary       *bitfinex.FundingOfferCancelSummary
 	cancelErr           error
 	cancelIncludeAllArg []bool
+	configSummaryText   string
+	decisionSummaryText string
 }
 
 func (s *stubLendingBot) GetActiveLendingCredits() ([]*bitfinex.FundingCredit, error) {
@@ -41,6 +43,14 @@ func (s *stubLendingBot) CancelPendingFundingOffers(includeAll bool) (*bitfinex.
 		return nil, s.cancelErr
 	}
 	return s.cancelSummary, nil
+}
+
+func (s *stubLendingBot) BuildRuntimeConfigSummaryText() string {
+	return s.configSummaryText
+}
+
+func (s *stubLendingBot) BuildDecisionSummaryText() string {
+	return s.decisionSummaryText
 }
 
 func newTestBotWithMessages(lendingBot LendingBot) (*Bot, *[]string, *[]tgbotapi.Chattable) {

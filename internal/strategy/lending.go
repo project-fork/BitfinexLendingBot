@@ -1,11 +1,15 @@
 package strategy
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"math"
 	"os"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kfrico/BitfinexLendingBot/internal/bitfinex"
@@ -18,17 +22,22 @@ import (
 
 // LendingBot 贷出机器人
 type LendingBot struct {
-	config         *config.Config
-	client         fundingClient
-	rateConverter  *rates.Converter
-	simpleStrategy *SimpleStrategy
-	smartStrategy  *SmartStrategy
-	orderTracker   *tracker.BotOrderTracker
-	notifyCallback func(string) error // Telegram 通知回调函数
-	logger         *log.Logger
-	lastCheckErr   string
-	errNotified    bool
-	lastCredits    map[int64]*bitfinex.FundingCredit
+	config                  *config.Config
+	client                  fundingClient
+	rateConverter           *rates.Converter
+	simpleStrategy          *SimpleStrategy
+	smartStrategy           *SmartStrategy
+	orderTracker            *tracker.BotOrderTracker
+	notifyCallback          func(string) error // Telegram 通知回调函数
+	logger                  *log.Logger
+	lastCheckErr            string
+	errNotified             bool
+	lastCredits             map[int64]*bitfinex.FundingCredit
+	lastDecisionMu          sync.RWMutex
+	lastDecision            *StrategyDecisionSummary
+	executionMu             sync.Mutex
+	lastExecutionAt         time.Time
+	recentOrderFingerprints map[string]time.Time
 }
 
 type fundingClient interface {
@@ -46,13 +55,14 @@ type fundingClient interface {
 // NewLendingBot 创建新的贷出机器人
 func NewLendingBot(cfg *config.Config, client *bitfinex.Client) *LendingBot {
 	return &LendingBot{
-		config:         cfg,
-		client:         client,
-		rateConverter:  rates.NewConverter(),
-		orderTracker:   tracker.NewBotOrderTracker(),
-		simpleStrategy: NewSimpleStrategy(cfg),
-		smartStrategy:  NewSmartStrategy(cfg),
-		logger:         log.New(os.Stderr, "", log.LstdFlags),
+		config:                  cfg,
+		client:                  client,
+		rateConverter:           rates.NewConverter(),
+		orderTracker:            tracker.NewBotOrderTracker(),
+		simpleStrategy:          NewSimpleStrategy(cfg),
+		smartStrategy:           NewSmartStrategy(cfg),
+		logger:                  log.New(os.Stderr, "", log.LstdFlags),
+		recentOrderFingerprints: make(map[string]time.Time),
 	}
 }
 
@@ -85,24 +95,97 @@ type LoanOffer struct {
 	Rate   float64 // 日利率（小数格式）
 	Period int
 	UseFRR bool // 是否使用 FRR 挂单模式
+	Reason LoanOfferReason
+}
+
+type LoanOfferReason struct {
+	FundSource        string
+	DepthSource       string
+	RateSource        string
+	PeriodSource      string
+	ExecutionDecision string
+}
+
+type StrategyDecisionSummary struct {
+	Strategy              string
+	FundingSymbol         string
+	FundsAvailable        float64
+	ReserveAmount         float64
+	HasPendingOrders      bool
+	FundingBookEntries    int
+	FundingBookSource     string
+	RequestedOfferCount   int
+	AttemptedOfferCount   int
+	SuccessfulOfferCount  int
+	SkippedOfferCount     int
+	FailedOfferCount      int
+	FRROfferCount         int
+	FixedRateOfferCount   int
+	RateBonusAppliedCount int
+	MinOfferRatePercent   float64
+	MaxOfferRatePercent   float64
+	MinOfferAmount        float64
+	MaxOfferAmount        float64
+	LoanPeriods           []int
+	FundSources           []string
+	DepthSources          []string
+	RateSources           []string
+	PeriodSources         []string
+	ExecutionDecisions    []string
+	TriggerSource         string
+	CooldownBypassed      bool
+	SkipReason            string
+	Notes                 []string
+}
+
+type placeLoanOffersResult struct {
+	AttemptedOfferCount   int
+	SuccessfulOfferCount  int
+	SkippedOfferCount     int
+	FailedOfferCount      int
+	FRROfferCount         int
+	FixedRateOfferCount   int
+	RateBonusAppliedCount int
 }
 
 // Execute 执行机器人主要逻辑（默认不取消既有未成交订单）
 func (lb *LendingBot) Execute() error {
-	return lb.execute(false)
+	return lb.execute(false, "自动触发", false)
 }
 
 // ExecuteWithOfferCancellation 执行机器人主要逻辑，并先取消程序追踪到的未成交订单。
 func (lb *LendingBot) ExecuteWithOfferCancellation() error {
-	return lb.execute(true)
+	return lb.execute(true, "自动触发", false)
 }
 
-func (lb *LendingBot) execute(cancelTrackedOffers bool) error {
+func (lb *LendingBot) ExecuteManual(triggerSource string, cancelTrackedOffers bool) error {
+	if strings.TrimSpace(triggerSource) == "" {
+		triggerSource = "手动触发"
+	}
+	return lb.execute(cancelTrackedOffers, triggerSource, true)
+}
+
+func (lb *LendingBot) execute(cancelTrackedOffers bool, triggerSource string, bypassCooldown bool) error {
 	logger := lb.getLogger()
 	logger.Println("开始执行贷出机器人...")
 
+	if blocked, remaining := lb.shouldBlockByCooldown(bypassCooldown); blocked {
+		logger.Printf("执行冷却中，跳过本轮主策略，剩余冷却时间: %s", remaining.Round(time.Second))
+		lb.storeAndLogDecisionSummary(logger, &StrategyDecisionSummary{
+			Strategy:         lb.config.GetStrategy(),
+			FundingSymbol:    lb.config.GetFundingSymbol(),
+			ReserveAmount:    lb.config.ReserveAmount,
+			TriggerSource:    triggerSource,
+			CooldownBypassed: bypassCooldown,
+			SkipReason:       fmt.Sprintf("命中执行冷却，剩余 %s", remaining.Round(time.Second)),
+			Notes:            []string{fmt.Sprintf("执行冷却中，剩余冷却时间 %s", remaining.Round(time.Second))},
+		})
+		return nil
+	}
+
 	// 清理旧的订单记录（避免记忆体泄漏）
 	lb.orderTracker.CleanOldOrders(24 * time.Hour)
+	lb.cleanRecentOrderFingerprints()
 
 	hasPendingOrders, err := lb.hasTrackedPendingOffers()
 	if err != nil {
@@ -142,9 +225,30 @@ func (lb *LendingBot) execute(cancelTrackedOffers bool) error {
 		logger.Printf("扣除保留金额后可用: %f", fundsAvailable)
 	}
 
+	decisionSummary := &StrategyDecisionSummary{
+		Strategy:          lb.config.GetStrategy(),
+		FundingSymbol:     lb.config.GetFundingSymbol(),
+		FundsAvailable:    fundsAvailable,
+		ReserveAmount:     lb.config.ReserveAmount,
+		HasPendingOrders:  hasPendingOrders,
+		FundingBookSource: "not_used",
+		TriggerSource:     triggerSource,
+		CooldownBypassed:  bypassCooldown,
+	}
+
 	// 检查可用资金
 	if fundsAvailable < lb.config.MinLoan {
 		logger.Println("可用资金小于最小贷出额，不进行操作")
+		decisionSummary.SkipReason = "可用资金低于最小下单金额"
+		decisionSummary.Notes = append(decisionSummary.Notes, fmt.Sprintf("可用资金 %.4f 低于最小下单金额 %.4f，本轮不下单", fundsAvailable, lb.config.MinLoan))
+		lb.storeAndLogDecisionSummary(logger, decisionSummary)
+		return nil
+	}
+	if lb.config.MinExecutableFunds > 0 && fundsAvailable < lb.config.MinExecutableFunds {
+		logger.Printf("可用资金 %.4f 低于最小执行资金阈值 %.4f，本轮跳过", fundsAvailable, lb.config.MinExecutableFunds)
+		decisionSummary.SkipReason = "可用资金低于最小执行资金阈值"
+		decisionSummary.Notes = append(decisionSummary.Notes, fmt.Sprintf("可用资金 %.4f 低于最小执行资金阈值 %.4f，本轮不下单", fundsAvailable, lb.config.MinExecutableFunds))
+		lb.storeAndLogDecisionSummary(logger, decisionSummary)
 		return nil
 	}
 
@@ -152,9 +256,25 @@ func (lb *LendingBot) execute(cancelTrackedOffers bool) error {
 	fundingBook, err := lb.client.GetFundingBook(lb.config.GetFundingSymbol(), constants.MaxPriceLevels)
 	if err != nil {
 		logger.Printf("取得 Funding Book 错误: %v", err)
-		logger.Println("使用fallback模式，仅使用最小利率策略")
-		// 使用空的funding book，策略会自动使用最小利率
-		fundingBook = []*bitfinex.FundingBookEntry{}
+		if lb.config.IsKlineStrategy() {
+			logger.Println("当前为 K 线策略，Funding Book 失败不影响本轮定价，继续使用 K 线数据")
+			decisionSummary.FundingBookSource = "unavailable_but_not_required"
+			decisionSummary.Notes = append(decisionSummary.Notes, "Funding Book 请求失败，但当前为 K 线策略，本轮继续使用 K 线数据")
+		} else {
+			logger.Println("Funding Book 属于关键定价输入，本轮中止下单")
+			decisionSummary.FundingBookSource = "required_but_unavailable"
+			decisionSummary.SkipReason = "Funding Book 请求失败"
+			decisionSummary.Notes = append(decisionSummary.Notes, "Funding Book 请求失败，本轮已中止下单")
+			lb.storeAndLogDecisionSummary(logger, decisionSummary)
+			return err
+		}
+	} else {
+		decisionSummary.FundingBookEntries = len(fundingBook)
+		if lb.config.IsKlineStrategy() {
+			decisionSummary.FundingBookSource = "available_but_unused"
+		} else {
+			decisionSummary.FundingBookSource = "required_and_used"
+		}
 	}
 
 	// 根据配置选择策略
@@ -162,7 +282,14 @@ func (lb *LendingBot) execute(cancelTrackedOffers bool) error {
 	switch lb.config.GetStrategy() {
 	case config.StrategyKline:
 		logger.Println("使用K线策略计算贷出订单...")
-		loanOffers = lb.calculateKlineOffers(fundsAvailable)
+		loanOffers, err = lb.calculateKlineOffers(fundsAvailable)
+		if err != nil {
+			logger.Printf("K线策略计算失败: %v", err)
+			decisionSummary.SkipReason = "K线策略计算失败"
+			decisionSummary.Notes = append(decisionSummary.Notes, fmt.Sprintf("K线策略计算失败: %v", err))
+			lb.storeAndLogDecisionSummary(logger, decisionSummary)
+			return err
+		}
 	case config.StrategySimple:
 		logger.Println("使用简单策略计算贷出订单...")
 		loanOffers = lb.simpleStrategy.CalculateOffers(fundsAvailable, fundingBook)
@@ -174,8 +301,35 @@ func (lb *LendingBot) execute(cancelTrackedOffers bool) error {
 		loanOffers = lb.calculateLoanOffers(fundsAvailable, fundingBook)
 	}
 
+	decisionSummary.RequestedOfferCount = len(loanOffers)
+	populateDecisionSummaryFromOffers(decisionSummary, loanOffers, lb.rateConverter)
+	if lb.config.MinExecutableFunds > 0 && decisionSummary.MaxOfferAmount > 0 && sumOfferAmounts(loanOffers) < lb.config.MinExecutableFunds {
+		totalOfferAmount := sumOfferAmounts(loanOffers)
+		logger.Printf("生成订单总额 %.4f 低于最小执行资金阈值 %.4f，本轮跳过", totalOfferAmount, lb.config.MinExecutableFunds)
+		decisionSummary.SkipReason = "生成订单总额低于最小执行资金阈值"
+		decisionSummary.Notes = append(decisionSummary.Notes, fmt.Sprintf("生成订单总额 %.4f 低于最小执行资金阈值 %.4f，本轮不下单", totalOfferAmount, lb.config.MinExecutableFunds))
+		lb.storeAndLogDecisionSummary(logger, decisionSummary)
+		return nil
+	}
+
 	// 下单
-	return lb.placeLoanOffers(loanOffers, hasPendingOrders)
+	placeResult, err := lb.placeLoanOffers(loanOffers, hasPendingOrders)
+	if err != nil {
+		decisionSummary.SkipReason = "下单阶段失败"
+		decisionSummary.Notes = append(decisionSummary.Notes, fmt.Sprintf("下单阶段失败: %v", err))
+		lb.storeAndLogDecisionSummary(logger, decisionSummary)
+		return err
+	}
+	decisionSummary.AttemptedOfferCount = placeResult.AttemptedOfferCount
+	decisionSummary.SuccessfulOfferCount = placeResult.SuccessfulOfferCount
+	decisionSummary.SkippedOfferCount = placeResult.SkippedOfferCount
+	decisionSummary.FailedOfferCount = placeResult.FailedOfferCount
+	decisionSummary.FRROfferCount = placeResult.FRROfferCount
+	decisionSummary.FixedRateOfferCount = placeResult.FixedRateOfferCount
+	decisionSummary.RateBonusAppliedCount = placeResult.RateBonusAppliedCount
+	lb.storeAndLogDecisionSummary(logger, decisionSummary)
+	lb.markExecutionCompleted()
+	return nil
 }
 
 func (lb *LendingBot) hasTrackedPendingOffers() (bool, error) {
@@ -337,6 +491,12 @@ func (lb *LendingBot) calculateHighHoldOffers(splitFundsAvailable *float64) []*L
 			Rate:   lb.config.GetHighHoldRateDecimal(),
 			Period: lb.config.GetLoanPeriod(constants.Period120Days),
 			UseFRR: false, // 高额持有单固定走一般利率单
+			Reason: LoanOfferReason{
+				FundSource:   "高额持有额度",
+				DepthSource:  "不使用 Funding Book 深度",
+				RateSource:   fmt.Sprintf("固定高额持有利率 %.6f%%", decimalDailyRateToPercent(lb.config.GetHighHoldRateDecimal())),
+				PeriodSource: describeTraditionalPeriodSource(lb.config, lb.config.GetHighHoldRateDecimal(), lb.config.GetLoanPeriod(constants.Period120Days)),
+			},
 		}
 		offers = append(offers, offer)
 		*splitFundsAvailable -= highHold
@@ -365,23 +525,14 @@ func (lb *LendingBot) calculateSpreadOffers(splitFundsAvailable float64, funding
 	lb.getLogger().Printf("分散策略 - 剩余资金: %.4f, 目标拆单数: %d, 实际拆单数: %d, 金额分配: %v",
 		splitFundsAvailable, numSplits, len(orderAmounts), orderAmounts)
 
-	// 计算利率递增量
-	gapClimb := (lb.config.GapTop - lb.config.GapBottom) / float64(len(orderAmounts))
-	nextLend := lb.config.GapBottom
-
-	depthIndex := 0
 	minDailyRate := lb.config.GetMinDailyRateDecimal()
-	lb.getLogger().Printf("分散策略 - GAP_BOTTOM: %.2f, GAP_TOP: %.2f, gapClimb: %.4f, 最低日利率: %.6f%%, FRR模式: %v",
-		lb.config.GapBottom, lb.config.GapTop, gapClimb, decimalDailyRateToPercent(minDailyRate), useFRR)
+	depthIndexes := buildTraditionalDepthProgressionIndexes(lb.config, fundingBook, len(orderAmounts))
+	rangeBottom, rangeTop := getFundingBookIndexRange(lb.config, fundingBook)
+	lb.getLogger().Printf("分散策略 - GAP_BOTTOM: %.2f, GAP_TOP: %.2f, 索引范围: %d-%d, 最低日利率: %.6f%%, FRR模式: %v",
+		lb.config.GapBottom, lb.config.GapTop, rangeBottom, rangeTop, decimalDailyRateToPercent(minDailyRate), useFRR)
+	lb.getLogger().Printf("分散策略 - 传统深度推进索引: %v", depthIndexes)
 
 	for idx, allocAmount := range orderAmounts {
-		// 累计市场量至指定利率区间（仅在有funding book数据时）
-		if len(fundingBook) > 0 {
-			for float64(depthIndex) < nextLend && depthIndex < len(fundingBook)-1 {
-				depthIndex++
-			}
-		}
-
 		if allocAmount < lb.config.MinLoan {
 			break
 		}
@@ -389,7 +540,11 @@ func (lb *LendingBot) calculateSpreadOffers(splitFundsAvailable float64, funding
 		// 计算利率
 		var rate float64
 		var marketRate float64
+		depthIndex := 0
 		rateDecision := "使用最低利率（无funding book数据）"
+		if len(depthIndexes) > idx {
+			depthIndex = depthIndexes[idx]
+		}
 		if len(fundingBook) > 0 && depthIndex < len(fundingBook) {
 			marketRate = fundingBook[depthIndex].Rate
 			if marketRate < minDailyRate {
@@ -412,9 +567,9 @@ func (lb *LendingBot) calculateSpreadOffers(splitFundsAvailable float64, funding
 
 		// 计算期间
 		period := lb.calculatePeriod(rate)
-		lb.getLogger().Printf("分散订单 #%d - 目标深度: %.2f, 实际深度索引: %d, 市场利率: %.6f%%, 决策: %s, 挂单利率: %.6f%%, 金额: %.4f, 期限: %d天",
+		lb.getLogger().Printf("分散订单 #%d - 目标深度索引: %d, 实际深度索引: %d, 市场利率: %.6f%%, 决策: %s, 挂单利率: %.6f%%, 金额: %.4f, 期限: %d天",
 			idx+1,
-			nextLend,
+			depthIndex,
 			depthIndex,
 			decimalDailyRateToPercent(marketRate),
 			rateDecision,
@@ -428,10 +583,14 @@ func (lb *LendingBot) calculateSpreadOffers(splitFundsAvailable float64, funding
 			Rate:   rate,
 			Period: period,
 			UseFRR: useFRR, // 分散单依 MIN_DAILY_LEND_RATE 是否为 FRR 决定
+			Reason: LoanOfferReason{
+				FundSource:   fmt.Sprintf("分散贷出资金，第 %d 笔", idx+1),
+				DepthSource:  describeDepthSource(fundingBook, depthIndex),
+				RateSource:   rateDecision,
+				PeriodSource: describeTraditionalPeriodSource(lb.config, rate, period),
+			},
 		}
 		offers = append(offers, offer)
-
-		nextLend += gapClimb
 	}
 
 	return offers
@@ -464,8 +623,9 @@ func rateMeetsThreshold(rate float64, threshold float64) bool {
 }
 
 // placeLoanOffers 下单
-func (lb *LendingBot) placeLoanOffers(loanOffers []*LoanOffer, hasPendingOrders bool) error {
+func (lb *LendingBot) placeLoanOffers(loanOffers []*LoanOffer, hasPendingOrders bool) (*placeLoanOffersResult, error) {
 	orderCount := 0
+	result := &placeLoanOffersResult{}
 	fundingSymbol := lb.config.GetFundingSymbol()
 	if lb.config.IsMinDailyLendRateFRR() {
 		lb.getLogger().Printf("MIN_DAILY_LEND_RATE=%s，分散单使用 FRR 模式；高额持有单维持固定利率", constants.MinDailyRateModeFRR)
@@ -479,11 +639,21 @@ func (lb *LendingBot) placeLoanOffers(loanOffers []*LoanOffer, hasPendingOrders 
 		offer.Amount = floorToCents(offer.Amount)
 		if offer.Amount < lb.config.MinLoan {
 			lb.getLogger().Printf("跳过无效金额: %.4f", offer.Amount)
+			result.SkippedOfferCount++
 			continue
 		}
 
+		result.AttemptedOfferCount++
+
 		if offer.UseFRR {
+			result.FRROfferCount++
+			offer.Reason.ExecutionDecision = "FRR 挂单，执行层不额外加 RATE_BONUS"
 			frrPeriod := lb.config.GetLoanPeriod(constants.Period120Days)
+			if lb.shouldSkipByFingerprint(offer, offer.Rate) {
+				lb.getLogger().Printf("跳过重复 FRR 订单指纹: amount=%.4f period=%d", offer.Amount, frrPeriod)
+				result.SkippedOfferCount++
+				continue
+			}
 
 			if lb.config.TestMode {
 				lb.getLogger().Printf("🧪 [测试模式] 模拟下单 => Type: %s, Amount: %.4f, Period: %d (参考Rate: %.6f%%)",
@@ -493,6 +663,7 @@ func (lb *LendingBot) placeLoanOffers(loanOffers []*LoanOffer, hasPendingOrders 
 					lb.rateConverter.DecimalToPercentage(offer.Rate),
 				)
 				orderCount++
+				result.SuccessfulOfferCount++
 			} else {
 				lb.getLogger().Printf("下单 => Type: %s, Amount: %.4f, Period: %d (参考Rate: %.6f%%)",
 					constants.OfferTypeFRRDeltaVar,
@@ -504,31 +675,47 @@ func (lb *LendingBot) placeLoanOffers(loanOffers []*LoanOffer, hasPendingOrders 
 				orderID, err := lb.client.SubmitFundingOfferFRR(fundingSymbol, offer.Amount, frrPeriod, false)
 				if err != nil {
 					lb.getLogger().Printf("下订单失败: %v", err)
+					result.FailedOfferCount++
 				} else {
 					// 追踪程序创建的订单
 					lb.orderTracker.TrackOrder(orderID)
 					lb.getLogger().Printf("成功创建订单 ID: %d，已加入追踪", orderID)
 					orderCount++
+					result.SuccessfulOfferCount++
 				}
 			}
 
 			continue
 		}
 
+		result.FixedRateOfferCount++
 		rate := offer.Rate
 		if !hasPendingOrders {
 			// 添加利率加成
 			lb.getLogger().Printf("下单决策 - 无既有待处理订单，对 %.6f%% 加上 RATE_BONUS %.6f%%",
 				decimalDailyRateToPercent(rate), lb.config.RateBonus)
 			rate += lb.rateConverter.PercentageToDecimal(lb.config.RateBonus)
+			result.RateBonusAppliedCount++
+			offer.Reason.ExecutionDecision = fmt.Sprintf("无既有待处理订单，执行层追加 RATE_BONUS %.6f%%", lb.config.RateBonus)
 		} else {
 			lb.getLogger().Printf("下单决策 - 有既有待处理订单，不加 RATE_BONUS，维持 %.6f%%",
 				decimalDailyRateToPercent(rate))
+			offer.Reason.ExecutionDecision = "有既有待处理订单，执行层不追加 RATE_BONUS"
+		}
+		if lb.shouldSkipByFingerprint(offer, rate) {
+			lb.getLogger().Printf("跳过重复固定利率订单指纹: amount=%.4f rate=%.6f%% period=%d",
+				offer.Amount,
+				lb.rateConverter.DecimalToPercentage(rate),
+				offer.Period,
+			)
+			result.SkippedOfferCount++
+			continue
 		}
 
 		// 验证利率
 		if !lb.rateConverter.ValidateDailyRate(rate) {
 			lb.getLogger().Printf("跳过无效利率: %.6f", rate)
+			result.SkippedOfferCount++
 			continue
 		}
 
@@ -537,6 +724,7 @@ func (lb *LendingBot) placeLoanOffers(loanOffers []*LoanOffer, hasPendingOrders 
 			lb.getLogger().Printf("🧪 [测试模式] 模拟下单 => Rate: %.6f%%, Amount: %.4f, Period: %d",
 				lb.rateConverter.DecimalToPercentage(rate), offer.Amount, offer.Period)
 			orderCount++
+			result.SuccessfulOfferCount++
 		} else {
 			// 正式模式：真的下单
 			lb.getLogger().Printf("下单 => Rate: %.6f%%, Amount: %.4f, Period: %d",
@@ -545,20 +733,468 @@ func (lb *LendingBot) placeLoanOffers(loanOffers []*LoanOffer, hasPendingOrders 
 			orderID, err := lb.client.SubmitFundingOffer(fundingSymbol, offer.Amount, rate, offer.Period, false)
 			if err != nil {
 				lb.getLogger().Printf("下订单失败: %v", err)
+				result.FailedOfferCount++
 			} else {
 				// 追踪程序创建的订单
 				lb.orderTracker.TrackOrder(orderID)
 				lb.getLogger().Printf("成功创建订单 ID: %d，已加入追踪", orderID)
 				orderCount++
+				result.SuccessfulOfferCount++
 			}
 		}
 	}
 
-	return nil
+	return result, nil
 }
 
 func decimalDailyRateToPercent(rate float64) float64 {
 	return rate * constants.PercentageToDecimal
+}
+
+func populateDecisionSummaryFromOffers(summary *StrategyDecisionSummary, loanOffers []*LoanOffer, rateConverter *rates.Converter) {
+	if summary == nil || len(loanOffers) == 0 || rateConverter == nil {
+		return
+	}
+
+	minRate := 0.0
+	maxRate := 0.0
+	minAmount := 0.0
+	maxAmount := 0.0
+	periodSet := make(map[int]struct{})
+	fundSourceSet := make(map[string]struct{})
+	depthSourceSet := make(map[string]struct{})
+	rateSourceSet := make(map[string]struct{})
+	periodSourceSet := make(map[string]struct{})
+	executionDecisionSet := make(map[string]struct{})
+
+	for i, offer := range loanOffers {
+		if offer == nil {
+			continue
+		}
+
+		ratePercent := rateConverter.DecimalToPercentage(offer.Rate)
+		if i == 0 || ratePercent < minRate {
+			minRate = ratePercent
+		}
+		if i == 0 || ratePercent > maxRate {
+			maxRate = ratePercent
+		}
+		if i == 0 || offer.Amount < minAmount {
+			minAmount = offer.Amount
+		}
+		if i == 0 || offer.Amount > maxAmount {
+			maxAmount = offer.Amount
+		}
+		periodSet[offer.Period] = struct{}{}
+		if offer.Reason.FundSource != "" {
+			fundSourceSet[offer.Reason.FundSource] = struct{}{}
+		}
+		if offer.Reason.DepthSource != "" {
+			depthSourceSet[offer.Reason.DepthSource] = struct{}{}
+		}
+		if offer.Reason.RateSource != "" {
+			rateSourceSet[offer.Reason.RateSource] = struct{}{}
+		}
+		if offer.Reason.PeriodSource != "" {
+			periodSourceSet[offer.Reason.PeriodSource] = struct{}{}
+		}
+		if offer.Reason.ExecutionDecision != "" {
+			executionDecisionSet[offer.Reason.ExecutionDecision] = struct{}{}
+		}
+	}
+
+	summary.MinOfferRatePercent = minRate
+	summary.MaxOfferRatePercent = maxRate
+	summary.MinOfferAmount = minAmount
+	summary.MaxOfferAmount = maxAmount
+	summary.LoanPeriods = make([]int, 0, len(periodSet))
+	for period := range periodSet {
+		summary.LoanPeriods = append(summary.LoanPeriods, period)
+	}
+	sort.Ints(summary.LoanPeriods)
+	summary.FundSources = mapKeysToSortedSlice(fundSourceSet)
+	summary.DepthSources = mapKeysToSortedSlice(depthSourceSet)
+	summary.RateSources = mapKeysToSortedSlice(rateSourceSet)
+	summary.PeriodSources = mapKeysToSortedSlice(periodSourceSet)
+	summary.ExecutionDecisions = mapKeysToSortedSlice(executionDecisionSet)
+}
+
+func logStrategyDecisionSummary(logger *log.Logger, summary *StrategyDecisionSummary) {
+	if logger == nil || summary == nil {
+		return
+	}
+
+	periodParts := make([]string, 0, len(summary.LoanPeriods))
+	for _, period := range summary.LoanPeriods {
+		periodParts = append(periodParts, fmt.Sprintf("%d", period))
+	}
+
+	noteText := "无"
+	if len(summary.Notes) > 0 {
+		noteText = strings.Join(summary.Notes, "；")
+	}
+	fundSourceText := joinOrDefault(summary.FundSources)
+	depthSourceText := joinOrDefault(summary.DepthSources)
+	rateSourceText := joinOrDefault(summary.RateSources)
+	periodSourceText := joinOrDefault(summary.PeriodSources)
+	executionDecisionText := joinOrDefault(summary.ExecutionDecisions)
+
+	logger.Printf("策略决策摘要 | strategy=%s | symbol=%s | trigger=%s | cooldown_bypassed=%t | skip_reason=%s | funds=%.4f | reserve=%.4f | pending=%t | book_source=%s | book_entries=%d | requested=%d | attempted=%d | success=%d | skipped=%d | failed=%d | frr=%d | fixed=%d | bonus_applied=%d | rate_range=%.6f%%~%.6f%% | amount_range=%.4f~%.4f | periods=%s | fund_sources=%s | depth_sources=%s | rate_sources=%s | period_sources=%s | execution_decisions=%s | notes=%s",
+		summary.Strategy,
+		summary.FundingSymbol,
+		defaultString(summary.TriggerSource, "自动触发"),
+		summary.CooldownBypassed,
+		defaultString(summary.SkipReason, "无"),
+		summary.FundsAvailable,
+		summary.ReserveAmount,
+		summary.HasPendingOrders,
+		summary.FundingBookSource,
+		summary.FundingBookEntries,
+		summary.RequestedOfferCount,
+		summary.AttemptedOfferCount,
+		summary.SuccessfulOfferCount,
+		summary.SkippedOfferCount,
+		summary.FailedOfferCount,
+		summary.FRROfferCount,
+		summary.FixedRateOfferCount,
+		summary.RateBonusAppliedCount,
+		summary.MinOfferRatePercent,
+		summary.MaxOfferRatePercent,
+		summary.MinOfferAmount,
+		summary.MaxOfferAmount,
+		strings.Join(periodParts, ","),
+		fundSourceText,
+		depthSourceText,
+		rateSourceText,
+		periodSourceText,
+		executionDecisionText,
+		noteText,
+	)
+}
+
+func describeDepthSource(fundingBook []*bitfinex.FundingBookEntry, depthIndex int) string {
+	if len(fundingBook) == 0 {
+		return "无 Funding Book，使用最小利率或合成逻辑"
+	}
+	if depthIndex < 0 || depthIndex >= len(fundingBook) {
+		return fmt.Sprintf("Funding Book 深度索引 %d 超出范围，使用边界近似", depthIndex)
+	}
+	return fmt.Sprintf("Funding Book 深度索引 %d", depthIndex)
+}
+
+func describeTraditionalPeriodSource(cfg *config.Config, rate float64, period int) string {
+	if cfg == nil {
+		return fmt.Sprintf("期限 %d 天", period)
+	}
+	if cfg.LoanDays > 0 {
+		return fmt.Sprintf("固定配置 LOAN_DAYS=%d", cfg.LoanDays)
+	}
+	for _, threshold := range cfg.GetSortedLoanPeriodThresholdsDesc() {
+		if rateMeetsThreshold(rate, threshold.ThresholdDecimal) && threshold.Days == period {
+			return fmt.Sprintf("达到 %d 天阈值 %.6f%%", threshold.Days, threshold.ThresholdPercent)
+		}
+	}
+	return fmt.Sprintf("未达到更长期限阈值，使用默认 %d 天", period)
+}
+
+func mapKeysToSortedSlice(source map[string]struct{}) []string {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(source))
+	for key := range source {
+		result = append(result, key)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func joinOrDefault(values []string) string {
+	if len(values) == 0 {
+		return "无"
+	}
+	return strings.Join(values, " | ")
+}
+
+func defaultString(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
+}
+
+func sumOfferAmounts(offers []*LoanOffer) float64 {
+	total := 0.0
+	for _, offer := range offers {
+		if offer == nil {
+			continue
+		}
+		total += offer.Amount
+	}
+	return total
+}
+
+func (lb *LendingBot) shouldBlockByCooldown(bypassCooldown bool) (bool, time.Duration) {
+	if lb == nil || lb.config == nil || lb.config.ExecutionCooldownSeconds <= 0 || bypassCooldown {
+		return false, 0
+	}
+
+	lb.executionMu.Lock()
+	defer lb.executionMu.Unlock()
+
+	if lb.lastExecutionAt.IsZero() {
+		return false, 0
+	}
+
+	cooldown := time.Duration(lb.config.ExecutionCooldownSeconds) * time.Second
+	elapsed := time.Since(lb.lastExecutionAt)
+	if elapsed >= cooldown {
+		return false, 0
+	}
+
+	return true, cooldown - elapsed
+}
+
+func (lb *LendingBot) markExecutionCompleted() {
+	if lb == nil {
+		return
+	}
+
+	lb.executionMu.Lock()
+	defer lb.executionMu.Unlock()
+	lb.lastExecutionAt = time.Now()
+}
+
+func (lb *LendingBot) cleanRecentOrderFingerprints() {
+	if lb == nil || lb.config == nil || lb.config.OrderFingerprintTTL <= 0 {
+		return
+	}
+
+	lb.executionMu.Lock()
+	defer lb.executionMu.Unlock()
+
+	ttl := time.Duration(lb.config.OrderFingerprintTTL) * time.Second
+	now := time.Now()
+	for fingerprint, createdAt := range lb.recentOrderFingerprints {
+		if now.Sub(createdAt) > ttl {
+			delete(lb.recentOrderFingerprints, fingerprint)
+		}
+	}
+}
+
+func buildOrderFingerprint(offer *LoanOffer, effectiveRate float64) string {
+	if offer == nil {
+		return ""
+	}
+	raw := fmt.Sprintf("%.2f|%.8f|%d|%t", floorToCents(offer.Amount), effectiveRate, offer.Period, offer.UseFRR)
+	sum := sha1.Sum([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func (lb *LendingBot) shouldSkipByFingerprint(offer *LoanOffer, effectiveRate float64) bool {
+	if lb == nil || lb.config == nil || lb.config.OrderFingerprintTTL <= 0 {
+		return false
+	}
+
+	fingerprint := buildOrderFingerprint(offer, effectiveRate)
+	if fingerprint == "" {
+		return false
+	}
+
+	lb.executionMu.Lock()
+	defer lb.executionMu.Unlock()
+
+	now := time.Now()
+	ttl := time.Duration(lb.config.OrderFingerprintTTL) * time.Second
+	if createdAt, ok := lb.recentOrderFingerprints[fingerprint]; ok && now.Sub(createdAt) <= ttl {
+		return true
+	}
+
+	lb.recentOrderFingerprints[fingerprint] = now
+	return false
+}
+
+func cloneStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]string, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+func cloneIntSlice(values []int) []int {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make([]int, len(values))
+	copy(cloned, values)
+	return cloned
+}
+
+func cloneStrategyDecisionSummary(summary *StrategyDecisionSummary) *StrategyDecisionSummary {
+	if summary == nil {
+		return nil
+	}
+
+	cloned := *summary
+	cloned.LoanPeriods = cloneIntSlice(summary.LoanPeriods)
+	cloned.FundSources = cloneStringSlice(summary.FundSources)
+	cloned.DepthSources = cloneStringSlice(summary.DepthSources)
+	cloned.RateSources = cloneStringSlice(summary.RateSources)
+	cloned.PeriodSources = cloneStringSlice(summary.PeriodSources)
+	cloned.ExecutionDecisions = cloneStringSlice(summary.ExecutionDecisions)
+	cloned.Notes = cloneStringSlice(summary.Notes)
+	return &cloned
+}
+
+func (lb *LendingBot) setLastDecisionSummary(summary *StrategyDecisionSummary) {
+	lb.lastDecisionMu.Lock()
+	defer lb.lastDecisionMu.Unlock()
+	lb.lastDecision = cloneStrategyDecisionSummary(summary)
+}
+
+func (lb *LendingBot) storeAndLogDecisionSummary(logger *log.Logger, summary *StrategyDecisionSummary) {
+	if summary == nil {
+		return
+	}
+	lb.setLastDecisionSummary(summary)
+	logStrategyDecisionSummary(logger, summary)
+}
+
+// GetLastDecisionSummary 返回最近一次策略执行摘要的快照。
+func (lb *LendingBot) GetLastDecisionSummary() *StrategyDecisionSummary {
+	lb.lastDecisionMu.RLock()
+	defer lb.lastDecisionMu.RUnlock()
+	return cloneStrategyDecisionSummary(lb.lastDecision)
+}
+
+// BuildDecisionSummaryText 构建适合 Telegram 展示的最近一次策略执行摘要。
+func (lb *LendingBot) BuildDecisionSummaryText() string {
+	summary := lb.GetLastDecisionSummary()
+	if summary == nil {
+		return "📭 尚无策略执行摘要"
+	}
+
+	periodParts := make([]string, 0, len(summary.LoanPeriods))
+	for _, period := range summary.LoanPeriods {
+		periodParts = append(periodParts, fmt.Sprintf("%d", period))
+	}
+
+	return fmt.Sprintf(
+		"📘 最近一次策略决策摘要\n\n策略: %s\nFunding Symbol: %s\n触发来源: %s\n冷却豁免: %t\n跳过原因: %s\n可用资金: %.4f\n保留金额: %.4f\n已有待处理订单: %t\nFunding Book 来源: %s\nFunding Book 档位数: %d\n请求订单数: %d\n尝试/成功/跳过/失败: %d/%d/%d/%d\nFRR/固定利率: %d/%d\n执行层追加 RATE_BONUS 次数: %d\n利率范围: %.6f%% ~ %.6f%%\n金额范围: %.4f ~ %.4f\n期限: %s\n资金来源: %s\n深度来源: %s\n利率来源: %s\n期限来源: %s\n执行决策: %s\n备注: %s",
+		summary.Strategy,
+		summary.FundingSymbol,
+		defaultString(summary.TriggerSource, "自动触发"),
+		summary.CooldownBypassed,
+		defaultString(summary.SkipReason, "无"),
+		summary.FundsAvailable,
+		summary.ReserveAmount,
+		summary.HasPendingOrders,
+		summary.FundingBookSource,
+		summary.FundingBookEntries,
+		summary.RequestedOfferCount,
+		summary.AttemptedOfferCount,
+		summary.SuccessfulOfferCount,
+		summary.SkippedOfferCount,
+		summary.FailedOfferCount,
+		summary.FRROfferCount,
+		summary.FixedRateOfferCount,
+		summary.RateBonusAppliedCount,
+		summary.MinOfferRatePercent,
+		summary.MaxOfferRatePercent,
+		summary.MinOfferAmount,
+		summary.MaxOfferAmount,
+		joinOrDefault(periodParts),
+		joinOrDefault(summary.FundSources),
+		joinOrDefault(summary.DepthSources),
+		joinOrDefault(summary.RateSources),
+		joinOrDefault(summary.PeriodSources),
+		joinOrDefault(summary.ExecutionDecisions),
+		joinOrDefault(summary.Notes),
+	)
+}
+
+// BuildRuntimeConfigSummaryText 构建适合 Telegram 展示的运行配置摘要。
+func (lb *LendingBot) BuildRuntimeConfigSummaryText() string {
+	if lb == nil || lb.config == nil {
+		return "❌ 配置不可用"
+	}
+
+	cfg := *lb.config
+	if lb.config.LoanPeriodThresholds != nil {
+		cfg.LoanPeriodThresholds = make(map[int]float64, len(lb.config.LoanPeriodThresholds))
+		for days, threshold := range lb.config.LoanPeriodThresholds {
+			cfg.LoanPeriodThresholds[days] = threshold
+		}
+	}
+
+	telegramState := "已启用"
+	if !cfg.IsTelegramEnabled() {
+		telegramState = "已禁用（" + cfg.TelegramDisabledReason() + "）"
+	}
+
+	runMode := fmt.Sprintf("定时执行（每 %d 分钟）", cfg.MinutesRun)
+	if cfg.RunOnlyOnNewCredits {
+		runMode = "触发条件执行（新借贷订单或余额变化）"
+	}
+
+	orderLimit := fmt.Sprintf("%d", cfg.OrderLimit)
+	if cfg.OrderLimit == 0 {
+		orderLimit = "不限制"
+	}
+
+	loanDays := "自动判断"
+	if cfg.LoanDays > 0 {
+		loanDays = fmt.Sprintf("%d 天", cfg.LoanDays)
+	}
+
+	highHoldState := "关闭"
+	if cfg.HighHoldAmount > 0 {
+		highHoldState = fmt.Sprintf("%.2f %s x %d @ %.4f%%", cfg.HighHoldAmount, strings.ToUpper(cfg.Currency), cfg.HighHoldOrders, cfg.HighHoldRate)
+	}
+
+	return fmt.Sprintf(
+		"⚙️ 运行配置摘要\n\nFunding Symbol: %s\n策略: %s\n执行模式: %s\n最低日利率: %s\n借贷天数: %s\n单次下单限制: %s\n单笔金额范围: %.2f ~ %s\n保留金额: %.2f %s\n通知阈值: %.4f%%\nTelegram: %s\n通知格式: %s\n测试模式: %t\n高额持有: %s\nRate Bonus: %.6f%%\nRate Range Increase: %.2f%%\nFunding Book UnderCut: %.6f%%\nLoan Period Thresholds: %s",
+		cfg.GetFundingSymbol(),
+		cfg.GetStrategy(),
+		runMode,
+		cfg.GetMinDailyRateDisplay(),
+		loanDays,
+		orderLimit,
+		cfg.MinLoan,
+		formatMaxLoanText(cfg.MaxLoan),
+		cfg.ReserveAmount,
+		strings.ToUpper(cfg.Currency),
+		cfg.NotifyRateThreshold,
+		telegramState,
+		cfg.NotificationFormat,
+		cfg.TestMode,
+		highHoldState,
+		cfg.RateBonus,
+		cfg.RateRangeIncreasePercent*100,
+		cfg.FundingBookRateUndercut,
+		formatLoanPeriodThresholds(cfg.GetSortedLoanPeriodThresholdsDesc()),
+	)
+}
+
+func formatMaxLoanText(maxLoan float64) string {
+	if maxLoan <= 0 {
+		return "不限"
+	}
+	return fmt.Sprintf("%.2f", maxLoan)
+}
+
+func formatLoanPeriodThresholds(thresholds []config.LoanPeriodThreshold) string {
+	if len(thresholds) == 0 {
+		return "无"
+	}
+
+	parts := make([]string, 0, len(thresholds))
+	for _, threshold := range thresholds {
+		parts = append(parts, fmt.Sprintf("%d天>=%.4f%%", threshold.Days, threshold.ThresholdPercent))
+	}
+	return strings.Join(parts, " | ")
 }
 
 // CheckRateThreshold 检查利率是否超过阈值（基于5分钟K线最近12根高点）
@@ -1021,20 +1657,27 @@ func (lb *LendingBot) GetActiveLendingCredits() ([]*bitfinex.FundingCredit, erro
 }
 
 // calculateKlineOffers 基于K线数据计算贷出订单
-func (lb *LendingBot) calculateKlineOffers(fundsAvailable float64) []*LoanOffer {
+func (lb *LendingBot) calculateKlineOffers(fundsAvailable float64) ([]*LoanOffer, error) {
 	var loanOffers []*LoanOffer
 
 	// 检查可用资金
 	if fundsAvailable < lb.config.MinLoan {
-		return loanOffers
+		return loanOffers, nil
 	}
 
 	// 获取K线数据
-	candles, _ := lb.client.GetFundingCandles(
+	candles, err := lb.client.GetFundingCandles(
 		lb.config.GetFundingSymbol(),
 		lb.config.KlineTimeFrame,
 		lb.config.KlinePeriod,
 	)
+	if err != nil {
+		lb.getLogger().Printf("取得 K 线数据失败: %v", err)
+		return nil, err
+	}
+	if len(candles) == 0 {
+		return nil, fmt.Errorf("kline strategy requires candles but received empty response")
+	}
 
 	// 找到最近期间内的最高利率
 	highestRate := lb.findHighestRateFromCandles(candles)
@@ -1072,7 +1715,7 @@ func (lb *LendingBot) calculateKlineOffers(fundsAvailable float64) []*LoanOffer 
 		}
 	}
 
-	return loanOffers
+	return loanOffers, nil
 }
 
 // findHighestRateFromCandles 从K线数据中找到最高利率
@@ -1230,6 +1873,12 @@ func (lb *LendingBot) calculateKlineSpreadOffers(fundsAvailable float64, targetR
 			Rate:   rate,
 			Period: period,
 			UseFRR: useFRR, // K线分散单依 MIN_DAILY_LEND_RATE 是否为 FRR 决定
+			Reason: LoanOfferReason{
+				FundSource:   fmt.Sprintf("K 线策略分散资金，第 %d 笔", i+1),
+				DepthSource:  "不使用 Funding Book 深度，基于 K 线目标利率分散",
+				RateSource:   fmt.Sprintf("K 线目标利率 %.6f%% 加上第 %d 笔递增", decimalDailyRateToPercent(targetRate), i+1),
+				PeriodSource: describeTraditionalPeriodSource(lb.config, rate, period),
+			},
 		}
 		offers = append(offers, offer)
 	}
