@@ -130,6 +130,48 @@ func TestBeginMainTask_RejectsConcurrentExecution(t *testing.T) {
 	}
 }
 
+func TestBeginMainTask_RejectsWhileLendingCheckRunning(t *testing.T) {
+	var builder strings.Builder
+	app := &Application{
+		mainLogger: newPrefixedLogger("MainTask", &builder),
+	}
+	app.lendingCheckRunning = true
+
+	if app.beginMainTask("借贷检查触发") {
+		t.Fatal("expected main task to be rejected while lending check is running")
+	}
+
+	if !strings.Contains(builder.String(), "借贷检查运行中") {
+		t.Fatalf("expected lending-check skip log, got:\n%s", builder.String())
+	}
+}
+
+func TestBeginLendingCheck_RejectsDuplicateExecution(t *testing.T) {
+	reader, writer := io.Pipe()
+	app := &Application{
+		lendingLogger: log.New(writer, "", log.LstdFlags),
+	}
+	app.lendingCheckRunning = true
+
+	var builder strings.Builder
+	done := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(&builder, reader)
+		close(done)
+	}()
+
+	if app.beginLendingCheck() {
+		t.Fatal("expected duplicate lending check to be rejected")
+	}
+
+	_ = writer.Close()
+	<-done
+
+	if !strings.Contains(builder.String(), "借贷检查执行中，跳过重复检查") {
+		t.Fatalf("expected duplicate lending-check log, got:\n%s", builder.String())
+	}
+}
+
 func TestLogTaskBoundary_UsesDirectionalSeparators(t *testing.T) {
 	var builder strings.Builder
 	logger := newPrefixedLogger("RateCheck", &builder)

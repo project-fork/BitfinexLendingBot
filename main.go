@@ -43,6 +43,7 @@ type Application struct {
 	mainTaskRunCount int
 	mainTaskMu       sync.Mutex
 	mainTaskRunning  bool
+	lendingCheckRunning bool
 }
 
 var errMainTaskAlreadyRunning = errors.New("main task already running")
@@ -413,6 +414,11 @@ func (app *Application) beginMainTask(trigger string) bool {
 		app.mainLogger.Printf("⏭️ 跳过主策略执行，已有任务运行中，触发来源: %s", trigger)
 		return false
 	}
+	if app.lendingCheckRunning {
+		app.mainTaskMu.Unlock()
+		app.mainLogger.Printf("⏭️ 跳过主策略执行，借贷检查运行中，触发来源: %s", trigger)
+		return false
+	}
 	app.mainTaskRunCount++
 	runID := app.mainTaskRunCount
 	app.mainTaskRunning = true
@@ -617,14 +623,10 @@ func (app *Application) scheduleLendingCheck() {
 
 // executeLendingCheck 执行借贷订单检查
 func (app *Application) executeLendingCheck() {
-	app.mainTaskMu.Lock()
-	mainTaskRunning := app.mainTaskRunning
-	app.mainTaskMu.Unlock()
-
-	if mainTaskRunning {
-		app.lendingLogger.Println("主任务执行中，跳过借贷检查")
+	if !app.beginLendingCheck() {
 		return
 	}
+	defer app.endLendingCheck()
 
 	hasNewCredits, err := app.lendingBot.CheckNewLendingCredits()
 	if err != nil {
@@ -637,6 +639,29 @@ func (app *Application) executeLendingCheck() {
 		app.lendingLogger.Println("满足执行触发条件，触发主要任务执行")
 		app.executeMainTask("借贷检查触发（新借贷订单或余额变化）")
 	}
+}
+
+func (app *Application) beginLendingCheck() bool {
+	app.mainTaskMu.Lock()
+	defer app.mainTaskMu.Unlock()
+
+	if app.mainTaskRunning {
+		app.lendingLogger.Println("主任务执行中，跳过借贷检查")
+		return false
+	}
+	if app.lendingCheckRunning {
+		app.lendingLogger.Println("借贷检查执行中，跳过重复检查")
+		return false
+	}
+
+	app.lendingCheckRunning = true
+	return true
+}
+
+func (app *Application) endLendingCheck() {
+	app.mainTaskMu.Lock()
+	app.lendingCheckRunning = false
+	app.mainTaskMu.Unlock()
 }
 
 func main() {
