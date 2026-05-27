@@ -20,9 +20,16 @@ type SmartStrategy struct {
 
 // NewSmartStrategy 创建智能策略引擎。
 func NewSmartStrategy(cfg *config.Config) *SmartStrategy {
+	return NewSmartStrategyWithAnalyzer(cfg, NewMarketAnalyzer())
+}
+
+func NewSmartStrategyWithAnalyzer(cfg *config.Config, analyzer *MarketAnalyzer) *SmartStrategy {
+	if analyzer == nil {
+		analyzer = NewMarketAnalyzer()
+	}
 	return &SmartStrategy{
 		config:   cfg,
-		analyzer: NewMarketAnalyzer(),
+		analyzer: analyzer,
 		logger:   log.New(os.Stderr, "", log.LstdFlags),
 	}
 }
@@ -59,6 +66,7 @@ func (ss *SmartStrategy) CalculateSmartOffers(fundsAvailable float64, fundingBoo
 		currentRate := analysisBook[0].Rate
 		totalVolume := ss.calculateTotalVolume(analysisBook)
 		ss.analyzer.AddRateSnapshot(currentRate, totalVolume)
+		persistSharedMarketHistory(ss.config, ss.analyzer)
 	}
 
 	marketCondition := ss.analyzer.AnalyzeMarket(analysisBook)

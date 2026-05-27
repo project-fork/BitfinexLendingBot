@@ -17,6 +17,7 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
 	"github.com/kfrico/BitfinexLendingBot/internal/formatting"
 	"github.com/kfrico/BitfinexLendingBot/internal/rates"
+	"github.com/kfrico/BitfinexLendingBot/internal/storage"
 	"github.com/kfrico/BitfinexLendingBot/internal/tracker"
 )
 
@@ -38,6 +39,8 @@ type LendingBot struct {
 	executionMu             sync.Mutex
 	lastExecutionAt         time.Time
 	recentOrderFingerprints map[string]time.Time
+	marketAnalyzer          *MarketAnalyzer
+	marketHistoryStore      *marketHistoryStore
 }
 
 type fundingClient interface {
@@ -54,16 +57,36 @@ type fundingClient interface {
 
 // NewLendingBot 创建新的贷出机器人
 func NewLendingBot(cfg *config.Config, client *bitfinex.Client) *LendingBot {
-	return &LendingBot{
+	logger := log.New(os.Stderr, "", log.LstdFlags)
+	analyzer := NewMarketAnalyzer()
+	bot := &LendingBot{
 		config:                  cfg,
 		client:                  client,
 		rateConverter:           rates.NewConverter(),
 		orderTracker:            tracker.NewBotOrderTracker(),
-		simpleStrategy:          NewSimpleStrategy(cfg),
-		smartStrategy:           NewSmartStrategy(cfg),
-		logger:                  log.New(os.Stderr, "", log.LstdFlags),
+		simpleStrategy:          NewSimpleStrategyWithAnalyzer(cfg, analyzer),
+		smartStrategy:           NewSmartStrategyWithAnalyzer(cfg, analyzer),
+		logger:                  logger,
 		recentOrderFingerprints: make(map[string]time.Time),
+		marketAnalyzer:          analyzer,
+		marketHistoryStore:      newMarketHistoryStore(storage.DefaultDataFilePath(), logger),
 	}
+	bot.restoreMarketHistory(time.Now())
+	return bot
+}
+
+func (lb *LendingBot) restoreMarketHistory(now time.Time) {
+	if lb == nil || lb.marketHistoryStore == nil {
+		return
+	}
+	lb.marketHistoryStore.load(lb.config.GetFundingSymbol(), lb.marketAnalyzer, now)
+}
+
+func (lb *LendingBot) persistMarketHistory() {
+	if lb == nil || lb.marketHistoryStore == nil {
+		return
+	}
+	lb.marketHistoryStore.save(lb.config.GetFundingSymbol(), lb.marketAnalyzer)
 }
 
 // SetLogger 设置日志记录器

@@ -45,6 +45,40 @@ func (ma *MarketAnalyzer) AddRateSnapshot(rate float64, volume float64) {
 		Volume:    volume,
 	}
 
+	ma.addSnapshot(snapshot)
+}
+
+func (ma *MarketAnalyzer) ExportRateHistory() []RateSnapshot {
+	if len(ma.rateHistory) == 0 {
+		return nil
+	}
+
+	snapshots := make([]RateSnapshot, len(ma.rateHistory))
+	copy(snapshots, ma.rateHistory)
+	return snapshots
+}
+
+func (ma *MarketAnalyzer) RestoreRateHistory(snapshots []RateSnapshot, now time.Time) {
+	ma.rateHistory = ma.rateHistory[:0]
+	if len(snapshots) == 0 {
+		return
+	}
+
+	for _, snapshot := range snapshots {
+		if snapshot.Rate <= 0 {
+			continue
+		}
+		if snapshot.Timestamp.IsZero() {
+			continue
+		}
+		if !now.IsZero() && snapshot.Timestamp.After(now.Add(time.Minute)) {
+			continue
+		}
+		ma.addSnapshot(snapshot)
+	}
+}
+
+func (ma *MarketAnalyzer) addSnapshot(snapshot RateSnapshot) {
 	ma.rateHistory = append(ma.rateHistory, snapshot)
 
 	// 保持历史数据大小限制

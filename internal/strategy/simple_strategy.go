@@ -19,9 +19,16 @@ type SimpleStrategy struct {
 }
 
 func NewSimpleStrategy(cfg *config.Config) *SimpleStrategy {
+	return NewSimpleStrategyWithAnalyzer(cfg, NewMarketAnalyzer())
+}
+
+func NewSimpleStrategyWithAnalyzer(cfg *config.Config, analyzer *MarketAnalyzer) *SimpleStrategy {
+	if analyzer == nil {
+		analyzer = NewMarketAnalyzer()
+	}
 	return &SimpleStrategy{
 		config:   cfg,
-		analyzer: NewMarketAnalyzer(),
+		analyzer: analyzer,
 		logger:   log.New(os.Stderr, "", log.LstdFlags),
 	}
 }
@@ -56,6 +63,7 @@ func (ss *SimpleStrategy) CalculateOffers(fundsAvailable float64, fundingBook []
 		currentRate := analysisBook[0].Rate
 		totalVolume := calculateTotalVolume(analysisBook)
 		ss.analyzer.AddRateSnapshot(currentRate, totalVolume)
+		persistSharedMarketHistory(ss.config, ss.analyzer)
 	}
 
 	marketCondition := ss.analyzer.AnalyzeMarket(analysisBook)

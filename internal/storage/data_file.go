@@ -17,6 +17,7 @@ type Data struct {
 	TrackedOrders map[int64]time.Time `json:"tracked_orders,omitempty"`
 	Telegram      TelegramData        `json:"telegram,omitempty"`
 	RuntimeConfig RuntimeConfigData   `json:"runtime_config,omitempty"`
+	MarketHistory MarketHistoryData   `json:"market_history,omitempty"`
 }
 
 type TelegramData struct {
@@ -37,6 +38,17 @@ type RuntimeConfigData struct {
 	RateRangeIncreasePercent *float64 `json:"rate_range_increase_percent,omitempty"`
 	Strategy                 *string  `json:"strategy,omitempty"`
 	KlineSmoothMethod        *string  `json:"kline_smooth_method,omitempty"`
+}
+
+type MarketHistoryData struct {
+	FundingSymbol string               `json:"funding_symbol,omitempty"`
+	Snapshots     []MarketSnapshotData `json:"snapshots,omitempty"`
+}
+
+type MarketSnapshotData struct {
+	Rate      float64   `json:"rate"`
+	Volume    float64   `json:"volume"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 func DefaultDataFilePath() string {
