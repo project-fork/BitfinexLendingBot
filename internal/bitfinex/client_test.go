@@ -1,13 +1,16 @@
 package bitfinex
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/bitfinexcom/bitfinex-api-go/v2/rest"
 	internalerrors "github.com/kfrico/BitfinexLendingBot/internal/errors"
 )
 
@@ -150,5 +153,118 @@ func TestClassifyBitfinexError_ClassifiesRateLimitString(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), internalerrors.ErrCodeRateLimit) {
 		t.Fatalf("expected rate limit error, got %v", err)
+	}
+}
+
+func TestClientExposesFundingCreditsHistoryAndLedgers(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth/r/funding/credits/fUSD/hist":
+			_, _ = w.Write([]byte(`[
+				[4951218878,"fUSD",1,1716265010000,1716453094000,437.0,null,"CLOSED","FIXED",null,null,0.00039,120,1716270000000,1716356400000,0,0,0,0,0.00039,0,null]
+			]`))
+		case "/auth/r/ledgers/USD/hist":
+			var payload map[string]any
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("failed to read ledger request body: %v", err)
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("failed to decode ledger request body: %v", err)
+			}
+			if got := payload["limit"]; got != float64(2) {
+				t.Fatalf("expected limit=2 in body, got %#v", got)
+			}
+			if got := payload["start"]; got != float64(1716422400000) {
+				t.Fatalf("expected start in body, got %#v", got)
+			}
+			if got := payload["end"]; got != float64(1716508799000) {
+				t.Fatalf("expected end in body, got %#v", got)
+			}
+			_, _ = w.Write([]byte(`[
+				[123456,"USD",null,1716456900000,null,2.70,1002.70,null,"Interest Payment"]
+			]`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	restClient := rest.NewClientWithURLHttpDo(server.URL+"/", func(c *http.Client, req *http.Request) (*http.Response, error) {
+		return server.Client().Do(req)
+	}).Credentials("key", "secret")
+
+	client := &Client{
+		restClient: restClient,
+		httpClient: server.Client(),
+		baseURL:    server.URL + "/",
+	}
+
+	credits, err := client.GetFundingCreditsHistory("fUSD")
+	if err != nil {
+		t.Fatalf("expected no credit history error, got %v", err)
+	}
+	if len(credits) != 1 {
+		t.Fatalf("expected 1 credit history item, got %d", len(credits))
+	}
+	if credits[0].ID != 4951218878 || credits[0].Status != "CLOSED" {
+		t.Fatalf("unexpected credit history item: %+v", credits[0])
+	}
+
+	ledgers, err := client.GetLedgers("USD", 1716422400000, 1716508799000, 2)
+	if err != nil {
+		t.Fatalf("expected no ledgers error, got %v", err)
+	}
+	if len(ledgers) != 1 {
+		t.Fatalf("expected 1 ledger item, got %d", len(ledgers))
+	}
+	if ledgers[0].Amount != 2.70 || ledgers[0].Description != "Interest Payment" {
+		t.Fatalf("unexpected ledger item: %+v", ledgers[0])
+	}
+}
+
+func TestClientGetLedgersFiltered_SendsWalletAndCategoryBody(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/auth/r/ledgers/USD/hist" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+
+		var payload map[string]any
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("failed to decode request body: %v", err)
+		}
+		if got := payload["wallet"]; got != "funding" {
+			t.Fatalf("expected wallet=funding, got %#v", got)
+		}
+		if got := payload["category"]; got != float64(28) {
+			t.Fatalf("expected category=28, got %#v", got)
+		}
+
+		_, _ = w.Write([]byte(`[
+			[123456,"USD",null,1716456900000,null,2.70,1002.70,null,"Interest Payment"]
+		]`))
+	}))
+	defer server.Close()
+
+	restClient := rest.NewClientWithURLHttpDo(server.URL+"/", func(c *http.Client, req *http.Request) (*http.Response, error) {
+		return server.Client().Do(req)
+	}).Credentials("key", "secret")
+
+	client := &Client{
+		restClient: restClient,
+		httpClient: server.Client(),
+		baseURL:    server.URL + "/",
+	}
+
+	entries, err := client.GetLedgersFiltered("USD", 1716422400000, 1716508799000, 2, "funding", int32(28))
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 ledger entry, got %d", len(entries))
 	}
 }

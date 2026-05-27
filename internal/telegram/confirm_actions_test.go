@@ -58,6 +58,58 @@ func newConfirmTestBot() (*Bot, *[]string, *[]tgbotapi.Chattable, *[]recordedCal
 	return bot, &messages, &chattables, &callbacks, &restartCalls, lb
 }
 
+func TestHandleEarnings_InvokesManualReportCallback(t *testing.T) {
+	messages := []string{}
+	callbackRuns := 0
+	bot := &Bot{
+		config:        &config.Config{Currency: "USD"},
+		rateConverter: rates.NewConverter(),
+		earningsCallback: func() error {
+			callbackRuns++
+			return nil
+		},
+		sendMessageFunc: func(chatID int64, text string) error {
+			messages = append(messages, text)
+			return nil
+		},
+	}
+
+	bot.handleEarnings(123)
+
+	if callbackRuns != 1 {
+		t.Fatalf("expected earnings callback to run once, got %d", callbackRuns)
+	}
+	if len(messages) != 2 || !strings.Contains(messages[1], "发送完成") {
+		t.Fatalf("expected start and success messages, got %v", messages)
+	}
+}
+
+func TestHandleEarningsPreview_InvokesPreviewCallback(t *testing.T) {
+	messages := []string{}
+	callbackRuns := 0
+	bot := &Bot{
+		config:        &config.Config{Currency: "USD"},
+		rateConverter: rates.NewConverter(),
+		earningsPreviewCallback: func() error {
+			callbackRuns++
+			return nil
+		},
+		sendMessageFunc: func(chatID int64, text string) error {
+			messages = append(messages, text)
+			return nil
+		},
+	}
+
+	bot.handleEarningsPreview(123)
+
+	if callbackRuns != 1 {
+		t.Fatalf("expected earnings preview callback to run once, got %d", callbackRuns)
+	}
+	if len(messages) != 2 || !strings.Contains(messages[1], "预览发送完成") {
+		t.Fatalf("expected start and success messages, got %v", messages)
+	}
+}
+
 func TestHandleRestart_SendsConfirmationKeyboard(t *testing.T) {
 	bot, _, chattables, _, restartCalls, _ := newConfirmTestBot()
 

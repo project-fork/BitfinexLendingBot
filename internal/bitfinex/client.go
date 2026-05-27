@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"reflect"
 	"sort"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/common"
 	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/fundingoffer"
+	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/ledger"
 	"github.com/bitfinexcom/bitfinex-api-go/v2/rest"
 
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
@@ -110,8 +112,19 @@ type FundingCredit struct {
 	RateReal   float64 // 实际日利率（FRR 用）
 	Period     int64   // 期间（天）
 	MTSCreated int64   // 创建时间戳（毫秒）
+	MTSUpdated int64   // 更新时间戳（毫秒）
 	MTSOpened  int64   // 开始时间戳（毫秒）
 	Status     string  // 状态
+}
+
+// LedgerEntry 代表历史账本条目
+type LedgerEntry struct {
+	ID          int64
+	Currency    string
+	MTS         int64
+	Amount      float64
+	Balance     float64
+	Description string
 }
 
 // EffectiveDailyRate 返回可用的日利率（FRR 使用 RateReal）
@@ -389,8 +402,133 @@ func (c *Client) GetFundingCredits(symbol string) ([]*FundingCredit, error) {
 			RateReal:   credit.RateReal,
 			Period:     credit.Period,
 			MTSCreated: credit.MTSCreated,
+			MTSUpdated: credit.MTSUpdated,
 			MTSOpened:  credit.MTSOpened,
 			Status:     credit.Status,
+		})
+	}
+
+	return result, nil
+}
+
+// GetFundingCreditsHistory 获取历史借贷订单
+func (c *Client) GetFundingCreditsHistory(symbol string) ([]*FundingCredit, error) {
+	credits, err := c.restClient.Funding.CreditsHistory(symbol)
+	if err != nil {
+		if strings.Contains(err.Error(), "data slice too short") {
+			return []*FundingCredit{}, nil
+		}
+		return nil, classifyBitfinexError("failed to get funding credits history", err)
+	}
+
+	if credits == nil || credits.Snapshot == nil || len(credits.Snapshot) == 0 {
+		return []*FundingCredit{}, nil
+	}
+
+	result := make([]*FundingCredit, 0, len(credits.Snapshot))
+	for _, credit := range credits.Snapshot {
+		if credit == nil {
+			continue
+		}
+		result = append(result, &FundingCredit{
+			ID:         credit.ID,
+			Symbol:     credit.Symbol,
+			Amount:     credit.Amount,
+			RateType:   credit.RateType,
+			Rate:       credit.Rate,
+			RateReal:   credit.RateReal,
+			Period:     credit.Period,
+			MTSCreated: credit.MTSCreated,
+			MTSUpdated: credit.MTSUpdated,
+			MTSOpened:  credit.MTSOpened,
+			Status:     credit.Status,
+		})
+	}
+
+	return result, nil
+}
+
+// GetLedgers 获取历史账本条目
+func (c *Client) GetLedgers(currency string, start int64, end int64, max int32) ([]*LedgerEntry, error) {
+	ledgers, err := c.restClient.Ledgers.Ledgers(currency, start, end, max)
+	if err != nil {
+		if strings.Contains(err.Error(), "data slice too short") {
+			return []*LedgerEntry{}, nil
+		}
+		return nil, classifyBitfinexError("failed to get ledgers", err)
+	}
+
+	if ledgers == nil || ledgers.Snapshot == nil || len(ledgers.Snapshot) == 0 {
+		return []*LedgerEntry{}, nil
+	}
+
+	result := make([]*LedgerEntry, 0, len(ledgers.Snapshot))
+	for _, entry := range ledgers.Snapshot {
+		if entry == nil {
+			continue
+		}
+		result = append(result, &LedgerEntry{
+			ID:          entry.ID,
+			Currency:    entry.Currency,
+			MTS:         entry.MTS,
+			Amount:      entry.Amount,
+			Balance:     entry.Balance,
+			Description: entry.Description,
+		})
+	}
+
+	return result, nil
+}
+
+// GetLedgersFiltered 获取带 wallet/category 过滤条件的历史账本条目
+func (c *Client) GetLedgersFiltered(currency string, start int64, end int64, max int32, wallet string, category int32) ([]*LedgerEntry, error) {
+	if max > 2500 {
+		return nil, fmt.Errorf("Max request limit:%d, got: %d", 2500, max)
+	}
+
+	payload := map[string]interface{}{
+		"start":  start,
+		"end":    end,
+		"limit":  max,
+		"wallet": wallet,
+	}
+	if category != 0 {
+		payload["category"] = category
+	}
+
+	req, err := c.restClient.NewAuthenticatedRequestWithData(common.PermissionRead, path.Join("ledgers", currency, "hist"), payload)
+	if err != nil {
+		return nil, err
+	}
+
+	raw, err := c.restClient.Request(req)
+	if err != nil {
+		if strings.Contains(err.Error(), "data slice too short") {
+			return []*LedgerEntry{}, nil
+		}
+		return nil, classifyBitfinexError("failed to get filtered ledgers", err)
+	}
+
+	snapshot, err := ledger.SnapshotFromRaw(raw, ledger.FromRaw)
+	if err != nil {
+		return nil, classifyBitfinexError("failed to decode filtered ledgers", err)
+	}
+	if snapshot == nil || snapshot.Snapshot == nil || len(snapshot.Snapshot) == 0 {
+		return []*LedgerEntry{}, nil
+	}
+
+	result := make([]*LedgerEntry, 0, len(snapshot.Snapshot))
+	for _, entry := range snapshot.Snapshot {
+		if entry == nil {
+			continue
+		}
+		result = append(result, &LedgerEntry{
+			ID:          entry.ID,
+			Currency:    entry.Currency,
+			MTS:         entry.MTS,
+			Amount:      entry.Amount,
+			Balance:     entry.Balance,
+			Description: entry.Description,
 		})
 	}
 

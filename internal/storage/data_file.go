@@ -18,6 +18,7 @@ type Data struct {
 	Telegram      TelegramData        `json:"telegram,omitempty"`
 	RuntimeConfig RuntimeConfigData   `json:"runtime_config,omitempty"`
 	MarketHistory MarketHistoryData   `json:"market_history,omitempty"`
+	DailyEarnings DailyEarningsData    `json:"daily_earnings,omitempty"`
 }
 
 type TelegramData struct {
@@ -43,6 +44,11 @@ type RuntimeConfigData struct {
 type MarketHistoryData struct {
 	FundingSymbol string               `json:"funding_symbol,omitempty"`
 	Snapshots     []MarketSnapshotData `json:"snapshots,omitempty"`
+}
+
+type DailyEarningsData struct {
+	LastReportDate string    `json:"last_report_date,omitempty"`
+	LastReportAt   time.Time `json:"last_report_at,omitempty"`
 }
 
 type MarketSnapshotData struct {

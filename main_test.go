@@ -5,11 +5,16 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/kfrico/BitfinexLendingBot/internal/bitfinex"
 	"github.com/kfrico/BitfinexLendingBot/internal/config"
+	"github.com/kfrico/BitfinexLendingBot/internal/report"
+	"github.com/kfrico/BitfinexLendingBot/internal/storage"
+	"github.com/kfrico/BitfinexLendingBot/internal/telegram"
 )
 
 func TestPrefixedLogger_AddsTaskPrefix(t *testing.T) {
@@ -169,6 +174,165 @@ func TestBeginLendingCheck_RejectsDuplicateExecution(t *testing.T) {
 
 	if !strings.Contains(builder.String(), "借贷检查执行中，跳过重复检查") {
 		t.Fatalf("expected duplicate lending-check log, got:\n%s", builder.String())
+	}
+}
+
+func TestNextDailyEarningsRun_ComputesNext0935(t *testing.T) {
+	loc := time.FixedZone("CST", 8*3600)
+
+	now := time.Date(2026, 5, 27, 9, 0, 0, 0, loc)
+	next := nextDailyEarningsRun(now)
+	expected := time.Date(2026, 5, 27, 9, 35, 0, 0, loc)
+	if !next.Equal(expected) {
+		t.Fatalf("expected next run %v, got %v", expected, next)
+	}
+
+	now = time.Date(2026, 5, 27, 9, 35, 0, 0, loc)
+	next = nextDailyEarningsRun(now)
+	expected = time.Date(2026, 5, 28, 9, 35, 0, 0, loc)
+	if !next.Equal(expected) {
+		t.Fatalf("expected next run after same-time trigger %v, got %v", expected, next)
+	}
+}
+
+func TestBeginDailyEarningsReport_RejectsWhileMainTaskOrLendingCheckRunning(t *testing.T) {
+	var builder strings.Builder
+	app := &Application{
+		dailyEarningsLogger: newPrefixedLogger("DailyEarnings", &builder),
+	}
+
+	app.mainTaskRunning = true
+	if app.beginDailyEarningsReport("日报调度") {
+		t.Fatal("expected daily earnings report to be rejected while main task is running")
+	}
+	if !strings.Contains(builder.String(), "主策略运行中") {
+		t.Fatalf("expected main-task skip log, got:\n%s", builder.String())
+	}
+
+	builder.Reset()
+	app.mainTaskRunning = false
+	app.lendingCheckRunning = true
+	if app.beginDailyEarningsReport("日报调度") {
+		t.Fatal("expected daily earnings report to be rejected while lending check is running")
+	}
+	if !strings.Contains(builder.String(), "借贷检查运行中") {
+		t.Fatalf("expected lending-check skip log, got:\n%s", builder.String())
+	}
+}
+
+func TestHasSentDailyEarningsReportForDate(t *testing.T) {
+	tempDir := t.TempDir()
+	dataFile := filepath.Join(tempDir, storage.DataFileName)
+
+	if err := storage.UpdateData(dataFile, func(state *storage.Data) {
+		state.DailyEarnings.LastReportDate = "2026-05-27"
+		state.DailyEarnings.LastReportAt = time.Date(2026, 5, 27, 9, 35, 0, 0, time.FixedZone("CST", 8*3600))
+	}); err != nil {
+		t.Fatalf("failed to seed daily earnings state: %v", err)
+	}
+
+	app := &Application{dataFilePath: dataFile}
+	if !app.hasSentDailyEarningsReportForDate("2026-05-27") {
+		t.Fatal("expected report date to be recognized as already sent")
+	}
+	if app.hasSentDailyEarningsReportForDate("2026-05-28") {
+		t.Fatal("expected different report date to be treated as unsent")
+	}
+}
+
+func TestMarkDailyEarningsReportSent(t *testing.T) {
+	tempDir := t.TempDir()
+	dataFile := filepath.Join(tempDir, storage.DataFileName)
+	app := &Application{dataFilePath: dataFile}
+	reportTime := time.Date(2026, 5, 27, 9, 35, 0, 0, time.FixedZone("CST", 8*3600))
+
+	if err := app.markDailyEarningsReportSent("2026-05-27", reportTime); err != nil {
+		t.Fatalf("expected no mark error, got %v", err)
+	}
+
+	state := storage.LoadData(dataFile)
+	if state.DailyEarnings.LastReportDate != "2026-05-27" {
+		t.Fatalf("expected last report date to persist, got %q", state.DailyEarnings.LastReportDate)
+	}
+	if !state.DailyEarnings.LastReportAt.Equal(reportTime) {
+		t.Fatalf("expected last report time to persist, got %v", state.DailyEarnings.LastReportAt)
+	}
+}
+
+func TestSendDailyEarningsReport_SkipsWhenAlreadySent(t *testing.T) {
+	tempDir := t.TempDir()
+	dataFile := filepath.Join(tempDir, storage.DataFileName)
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 5, 27, 9, 35, 0, 0, loc)
+	if err := storage.UpdateData(dataFile, func(state *storage.Data) {
+		state.DailyEarnings.LastReportDate = "2026-05-27"
+		state.DailyEarnings.LastReportAt = now
+	}); err != nil {
+		t.Fatalf("failed to seed already-sent state: %v", err)
+	}
+
+	var sent bool
+	app := &Application{
+		config: &config.Config{Currency: "usd"},
+		telegramBot: &telegram.Bot{},
+		dataFilePath: dataFile,
+		dailyEarningsLogger: log.New(io.Discard, "", 0),
+		reportBuilder: report.NewDailyEarningsReportBuilder(&config.Config{Currency: "usd"}),
+	}
+
+	if err := app.sendDailyEarningsReport(now, []*bitfinex.FundingCredit{}, []*bitfinex.LedgerEntry{}); err != nil {
+		t.Fatalf("expected no send error, got %v", err)
+	}
+	if sent {
+		t.Fatal("expected already-sent report to skip telegram delivery")
+	}
+}
+
+func TestSendDailyEarningsReport_DoesNotMarkSentWhenTelegramDisabled(t *testing.T) {
+	tempDir := t.TempDir()
+	dataFile := filepath.Join(tempDir, storage.DataFileName)
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 5, 27, 9, 35, 0, 0, loc)
+
+	app := &Application{
+		config:              &config.Config{Currency: "usd"},
+		telegramBot:         nil,
+		dataFilePath:        dataFile,
+		dailyEarningsLogger: log.New(io.Discard, "", 0),
+		reportBuilder:       report.NewDailyEarningsReportBuilder(&config.Config{Currency: "usd"}),
+	}
+
+	if err := app.sendDailyEarningsReport(now, []*bitfinex.FundingCredit{}, []*bitfinex.LedgerEntry{}); err != nil {
+		t.Fatalf("expected telegram-disabled path not to error, got %v", err)
+	}
+
+	state := storage.LoadData(dataFile)
+	if state.DailyEarnings.LastReportDate != "" {
+		t.Fatalf("expected no sent marker when telegram disabled, got %q", state.DailyEarnings.LastReportDate)
+	}
+}
+
+func TestSendDailyEarningsReportPreview_DoesNotMarkSentState(t *testing.T) {
+	tempDir := t.TempDir()
+	dataFile := filepath.Join(tempDir, storage.DataFileName)
+	loc := time.FixedZone("CST", 8*3600)
+	now := time.Date(2026, 5, 27, 9, 35, 0, 0, loc)
+
+	app := &Application{
+		config:              &config.Config{Currency: "usd"},
+		telegramBot:         nil,
+		dataFilePath:        dataFile,
+		dailyEarningsLogger: log.New(io.Discard, "", 0),
+		reportBuilder:       report.NewDailyEarningsReportBuilder(&config.Config{Currency: "usd"}),
+	}
+
+	if err := app.sendDailyEarningsReportWithOptions(now, []*bitfinex.FundingCredit{}, []*bitfinex.LedgerEntry{}, true); err != nil {
+		t.Fatalf("expected preview path not to error, got %v", err)
+	}
+
+	state := storage.LoadData(dataFile)
+	if state.DailyEarnings.LastReportDate != "" {
+		t.Fatalf("expected preview send not to persist sent state, got %q", state.DailyEarnings.LastReportDate)
 	}
 }
 

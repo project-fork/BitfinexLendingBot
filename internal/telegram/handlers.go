@@ -705,6 +705,40 @@ func (b *Bot) handleRun(chatID int64) {
 	b.sendMessage(chatID, "✅ 重跑完成！已保留现有未成交订单，并继续按策略执行")
 }
 
+// handleEarnings 处理手动发送正式收益日报指令
+func (b *Bot) handleEarnings(chatID int64) {
+	b.sendMessage(chatID, "📨 开始发送当日收益日报...")
+
+	if b.earningsCallback == nil {
+		b.sendMessage(chatID, "❌ 收益日报功能未初始化，请联系管理员")
+		return
+	}
+
+	if err := b.earningsCallback(); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("❌ 收益日报发送失败: %v", err))
+		return
+	}
+
+	b.sendMessage(chatID, "✅ 收益日报发送完成")
+}
+
+// handleEarningsPreview 处理收益日报预览指令
+func (b *Bot) handleEarningsPreview(chatID int64) {
+	b.sendMessage(chatID, "🧪 开始发送收益日报预览...")
+
+	if b.earningsPreviewCallback == nil {
+		b.sendMessage(chatID, "❌ 收益日报预览功能未初始化，请联系管理员")
+		return
+	}
+
+	if err := b.earningsPreviewCallback(); err != nil {
+		b.sendMessage(chatID, fmt.Sprintf("❌ 收益日报预览发送失败: %v", err))
+		return
+	}
+
+	b.sendMessage(chatID, "✅ 收益日报预览发送完成")
+}
+
 // handleCancelPendingOffers 处理取消未成交订单指令
 func (b *Bot) handleCancelPendingOffers(chatID int64, text string) {
 	if b.lendingBot == nil {

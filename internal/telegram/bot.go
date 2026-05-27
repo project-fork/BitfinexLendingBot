@@ -42,6 +42,8 @@ type Bot struct {
 	dataFilePath        string
 	restartCallback     func() error // 取消订单后重跑回调函数
 	runCallback         func() error // 保留未成交订单直接重跑回调函数
+	earningsCallback    func() error // 手动触发正式收益日报
+	earningsPreviewCallback func() error // 手动触发收益日报预览
 	lendingBot          LendingBot   // 借贷机器人引用
 	logger              *log.Logger
 	sendMessageFunc     func(chatID int64, text string) error
@@ -101,6 +103,8 @@ func buildTelegramCommands() []telegramCommand {
 		{Command: "decisionsummary", Description: "查询 | 显示最近一次策略决策摘要"},
 		{Command: "lending", Description: "查询 | 查看活跃借贷"},
 		{Command: "offers", Description: "查询 | 查看未成交订单"},
+		{Command: "earnings", Description: "查询 | 发送当日收益日报"},
+		{Command: "earningspreview", Description: "查询 | 发送收益日报预览"},
 
 		{Command: "threshold", Description: "设置 | 利率通知阈值"},
 		{Command: "reserve", Description: "设置 | 保留金额"},
@@ -508,6 +512,16 @@ func (b *Bot) SetRunCallback(callback func() error) {
 	b.runCallback = callback
 }
 
+// SetEarningsCallback 设置手动发送正式收益日报的回调函数
+func (b *Bot) SetEarningsCallback(callback func() error) {
+	b.earningsCallback = callback
+}
+
+// SetEarningsPreviewCallback 设置手动发送收益日报预览的回调函数
+func (b *Bot) SetEarningsPreviewCallback(callback func() error) {
+	b.earningsPreviewCallback = callback
+}
+
 // SetLendingBot 设置借贷机器人引用
 func (b *Bot) SetLendingBot(lendingBot LendingBot) {
 	b.lendingBot = lendingBot
@@ -535,6 +549,10 @@ func (b *Bot) handleCommand(chatID int64, text string) {
 		b.handleRestart(chatID)
 	case text == "/run":
 		b.handleRun(chatID)
+	case text == "/earnings":
+		b.handleEarnings(chatID)
+	case text == "/earningspreview":
+		b.handleEarningsPreview(chatID)
 	case text == "/rate":
 		b.handleRate(chatID)
 	case text == "/check":
@@ -607,6 +625,8 @@ func (b *Bot) handleHelp(chatID int64) {
 /decisionsummary - 显示最近一次策略决策摘要
 /lending - 查看当前活跃的借贷订单
 /offers - 查看当前未成交订单（含程序追踪标记）
+/earnings - 手动发送当日收益日报（遵守当天去重）
+/earningspreview - 发送收益日报预览（不写已发送状态）
 
 ⚙️ 设置指令:
 /threshold [数值] - 设置利率通知阈值

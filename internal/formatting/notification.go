@@ -7,7 +7,7 @@ import (
 )
 
 func FormatCurrency(amount float64, currency string, style string) string {
-	if strings.EqualFold(style, "aligned") && strings.EqualFold(currency, "usd") {
+	if strings.EqualFold(currency, "usd") {
 		return fmt.Sprintf("$%.2f", amount)
 	}
 	return fmt.Sprintf("%.2f %s", amount, strings.ToLower(currency))

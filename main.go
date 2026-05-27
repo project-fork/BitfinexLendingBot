@@ -18,6 +18,8 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/config"
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
 	"github.com/kfrico/BitfinexLendingBot/internal/rates"
+	"github.com/kfrico/BitfinexLendingBot/internal/report"
+	"github.com/kfrico/BitfinexLendingBot/internal/storage"
 	"github.com/kfrico/BitfinexLendingBot/internal/strategy"
 	"github.com/kfrico/BitfinexLendingBot/internal/telegram"
 )
@@ -32,7 +34,10 @@ type Application struct {
 	mainLogger     *log.Logger
 	lendingLogger  *log.Logger
 	hourlyLogger   *log.Logger
+	dailyEarningsLogger *log.Logger
 	telegramLogger *log.Logger
+	dataFilePath   string
+	reportBuilder  *report.DailyEarningsReportBuilder
 
 	// 并发控制
 	ctx    context.Context
@@ -44,6 +49,7 @@ type Application struct {
 	mainTaskMu       sync.Mutex
 	mainTaskRunning  bool
 	lendingCheckRunning bool
+	dailyEarningsRunning bool
 }
 
 var errMainTaskAlreadyRunning = errors.New("main task already running")
@@ -87,7 +93,10 @@ func NewApplication(configPath string) (*Application, error) {
 		mainLogger:     newPrefixedLogger("MainTask", os.Stderr),
 		lendingLogger:  newPrefixedLogger("LendingCheck", os.Stderr),
 		hourlyLogger:   newPrefixedLogger("RateCheck", os.Stderr),
+		dailyEarningsLogger: newPrefixedLogger("DailyEarnings", os.Stderr),
 		telegramLogger: newPrefixedLogger("TelegramBot", os.Stderr),
+		dataFilePath:   storage.DefaultDataFilePath(),
+		reportBuilder:  report.NewDailyEarningsReportBuilder(cfg),
 		ctx:            ctx,
 		cancel:         cancel,
 	}
@@ -98,6 +107,8 @@ func NewApplication(configPath string) (*Application, error) {
 		telegramBot.SetLogger(app.telegramLogger)
 		telegramBot.SetRestartCallback(app.handleRestart)
 		telegramBot.SetRunCallback(app.handleRun)
+		telegramBot.SetEarningsCallback(app.handleDailyEarnings)
+		telegramBot.SetEarningsPreviewCallback(app.handleDailyEarningsPreview)
 		telegramBot.SetLendingBot(lendingBot)
 		lendingBot.SetNotifyCallback(telegramBot.SendNotification)
 	}
@@ -295,6 +306,13 @@ func (app *Application) startWorkers() {
 		app.scheduleLendingCheck()
 	})
 
+	// 启动每日收益日报
+	app.wg.Add(1)
+	go app.runWorker("DailyEarnings", func() {
+		defer app.wg.Done()
+		app.scheduleDailyEarningsReport()
+	})
+
 	// 启动主要业务逻辑调度
 	app.wg.Add(1)
 	go app.runWorker("MainTask", func() {
@@ -335,6 +353,10 @@ func (app *Application) getTaskLogger(name string) *log.Logger {
 	case "TelegramBot":
 		if app.telegramLogger != nil {
 			return app.telegramLogger
+		}
+	case "DailyEarnings":
+		if app.dailyEarningsLogger != nil {
+			return app.dailyEarningsLogger
 		}
 	}
 	return log.Default()
@@ -605,6 +627,18 @@ func (app *Application) handleRun() error {
 	return nil
 }
 
+// handleDailyEarnings 处理手动触发正式收益日报请求
+func (app *Application) handleDailyEarnings() error {
+	log.Println("收到手动收益日报请求，开始执行日报逻辑...")
+	return app.executeDailyEarningsReportNow("Telegram /earnings 手动触发", false)
+}
+
+// handleDailyEarningsPreview 处理手动触发收益日报预览请求
+func (app *Application) handleDailyEarningsPreview() error {
+	log.Println("收到手动收益日报预览请求，开始执行日报预览逻辑...")
+	return app.executeDailyEarningsReportNow("Telegram /earningspreview 手动触发", true)
+}
+
 // scheduleLendingCheck 调度借贷订单检查
 func (app *Application) scheduleLendingCheck() {
 	ticker := time.NewTicker(time.Duration(app.config.LendingCheckMinutes) * time.Minute)
@@ -662,6 +696,201 @@ func (app *Application) endLendingCheck() {
 	app.mainTaskMu.Lock()
 	app.lendingCheckRunning = false
 	app.mainTaskMu.Unlock()
+}
+
+func nextDailyEarningsRun(now time.Time) time.Time {
+	next := time.Date(now.Year(), now.Month(), now.Day(), 9, 35, 0, 0, now.Location())
+	if !now.Before(next) {
+		next = next.AddDate(0, 0, 1)
+	}
+	return next
+}
+
+func (app *Application) beginDailyEarningsReport(trigger string) bool {
+	app.mainTaskMu.Lock()
+	defer app.mainTaskMu.Unlock()
+
+	if app.mainTaskRunning {
+		app.dailyEarningsLogger.Printf("⏭️ 跳过收益日报，主策略运行中，触发来源: %s", trigger)
+		return false
+	}
+	if app.lendingCheckRunning {
+		app.dailyEarningsLogger.Printf("⏭️ 跳过收益日报，借贷检查运行中，触发来源: %s", trigger)
+		return false
+	}
+	if app.dailyEarningsRunning {
+		app.dailyEarningsLogger.Printf("⏭️ 跳过收益日报，日报任务运行中，触发来源: %s", trigger)
+		return false
+	}
+
+	app.dailyEarningsRunning = true
+	return true
+}
+
+func (app *Application) endDailyEarningsReport() {
+	app.mainTaskMu.Lock()
+	app.dailyEarningsRunning = false
+	app.mainTaskMu.Unlock()
+}
+
+func (app *Application) hasSentDailyEarningsReportForDate(reportDate string) bool {
+	if app == nil || app.dataFilePath == "" || strings.TrimSpace(reportDate) == "" {
+		return false
+	}
+	state := storage.LoadData(app.dataFilePath)
+	return state.DailyEarnings.LastReportDate == reportDate
+}
+
+func (app *Application) markDailyEarningsReportSent(reportDate string, reportedAt time.Time) error {
+	if app == nil || app.dataFilePath == "" || strings.TrimSpace(reportDate) == "" {
+		return nil
+	}
+	return storage.UpdateData(app.dataFilePath, func(state *storage.Data) {
+		state.DailyEarnings.LastReportDate = reportDate
+		state.DailyEarnings.LastReportAt = reportedAt
+	})
+}
+
+func (app *Application) sendDailyEarningsReport(now time.Time, credits []*bitfinex.FundingCredit, ledgers []*bitfinex.LedgerEntry) error {
+	return app.sendDailyEarningsReportWithOptions(now, credits, ledgers, false)
+}
+
+func (app *Application) sendDailyEarningsReportWithOptions(now time.Time, credits []*bitfinex.FundingCredit, ledgers []*bitfinex.LedgerEntry, preview bool) error {
+	if app == nil || app.reportBuilder == nil {
+		return fmt.Errorf("daily earnings report builder is not configured")
+	}
+
+	reportDate := now.Format("2006-01-02")
+	if !preview && app.hasSentDailyEarningsReportForDate(reportDate) {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Printf("收益日报 %s 已发送，跳过重复发送", reportDate)
+		}
+		return nil
+	}
+
+	message, _, err := app.reportBuilder.Build(now, credits, ledgers)
+	if err != nil {
+		return err
+	}
+
+	if app.telegramBot == nil {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Println("Telegram 未启用，跳过收益日报发送，也不会记录已发送状态")
+		}
+		return nil
+	}
+
+	if err := app.telegramBot.SendNotification(message); err != nil {
+		return err
+	}
+
+	if preview {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Println("收益日报预览发送成功，不写入已发送状态")
+		}
+		return nil
+	}
+
+	return app.markDailyEarningsReportSent(reportDate, now)
+}
+
+func (app *Application) scheduleDailyEarningsReport() {
+	for {
+		select {
+		case <-app.ctx.Done():
+			app.dailyEarningsLogger.Println("收益日报调度器收到停止信号")
+			return
+		default:
+		}
+
+		now := time.Now()
+		next := nextDailyEarningsRun(now)
+		delay := next.Sub(now)
+		app.dailyEarningsLogger.Printf("下次收益日报执行时间: %s, 等待时间: %s", next.Format("2006-01-02 15:04:05"), delay)
+
+		select {
+		case <-app.ctx.Done():
+			app.dailyEarningsLogger.Println("收益日报调度器在等待中收到停止信号")
+			return
+		case <-time.After(delay):
+			app.executeDailyEarningsReport("每日 09:35 调度")
+		}
+	}
+}
+
+func (app *Application) executeDailyEarningsReport(trigger string) {
+	if err := app.executeDailyEarningsReportNow(trigger, false); err != nil && app.dailyEarningsLogger != nil {
+		app.dailyEarningsLogger.Printf("发送收益日报失败: %v", err)
+	}
+}
+
+func (app *Application) executeDailyEarningsReportNow(trigger string, preview bool) error {
+	if !app.beginDailyEarningsReport(trigger) {
+		return errMainTaskAlreadyRunning
+	}
+	defer app.endDailyEarningsReport()
+
+	if app.config == nil || app.bfxClient == nil || app.reportBuilder == nil {
+		err := fmt.Errorf("daily earnings dependencies are not initialized")
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Println("收益日报依赖未初始化，跳过执行")
+		}
+		return err
+	}
+
+	now := time.Now()
+	activeCredits, err := app.bfxClient.GetFundingCredits(app.config.GetFundingSymbol())
+	if err != nil {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Printf("获取活跃借贷订单失败: %v", err)
+		}
+		return err
+	}
+
+	historyCredits, err := app.bfxClient.GetFundingCreditsHistory(app.config.GetFundingSymbol())
+	if err != nil {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Printf("获取历史借贷订单失败: %v", err)
+		}
+		return err
+	}
+
+	windowStart, windowEnd := reportDailyEarningsLedgerWindow(now)
+	ledgers, err := app.bfxClient.GetLedgersFiltered(strings.ToUpper(app.config.Currency), windowStart.UnixMilli(), windowEnd.UnixMilli(), 2500, "funding", 28)
+	if err != nil {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Printf("获取账本历史失败: %v", err)
+		}
+		return err
+	}
+
+	selectedCredits := report.SelectCreditsForYesterdayEstimate(now, activeCredits, historyCredits)
+	if err := app.sendDailyEarningsReportWithOptions(now, selectedCredits, ledgers, preview); err != nil {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Printf("发送收益日报失败: %v", err)
+		}
+		return err
+	}
+
+	if app.dailyEarningsLogger != nil {
+		if preview {
+			app.dailyEarningsLogger.Println("收益日报预览发送成功")
+		} else {
+			app.dailyEarningsLogger.Println("收益日报发送成功")
+		}
+	}
+	return nil
+}
+
+func reportDailyEarningsLedgerWindow(now time.Time) (time.Time, time.Time) {
+	loc := now.Location()
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	yearStart := time.Date(now.Year(), time.January, 1, 0, 0, 0, 0, loc)
+	tomorrowStart := todayStart.AddDate(0, 0, 1)
+	if yearStart.Before(todayStart.AddDate(0, 0, -6)) {
+		return yearStart, tomorrowStart
+	}
+	return todayStart.AddDate(0, 0, -6), tomorrowStart
 }
 
 func main() {

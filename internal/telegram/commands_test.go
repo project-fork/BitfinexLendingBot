@@ -16,6 +16,8 @@ func TestBuildTelegramCommands_IncludesSupportedCommands(t *testing.T) {
 		"decisionsummary": "查询 | 显示最近一次策略决策摘要",
 		"lending":         "查询 | 查看活跃借贷",
 		"offers":          "查询 | 查看未成交订单",
+		"earnings":        "查询 | 发送当日收益日报",
+		"earningspreview": "查询 | 发送收益日报预览",
 		"simplestrategy":  "策略 | 切换简单策略",
 		"canceloffers":    "控制 | 取消未成交订单",
 		"restart":         "控制 | 取消追踪订单后重跑",
@@ -54,6 +56,8 @@ func TestBuildTelegramCommands_UsesGroupedOrdering(t *testing.T) {
 		"decisionsummary",
 		"lending",
 		"offers",
+		"earnings",
+		"earningspreview",
 	}
 
 	if len(commands) < len(expectedPrefix) {
