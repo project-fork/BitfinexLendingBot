@@ -36,6 +36,10 @@ LENDING_CHECK_MINUTES:         5                    # 借贷检查调度间隔�
 EXECUTION_COOLDOWN_SECONDS:    30                   # 主策略两次执行之间的最小冷却时间（秒）；防止短时间重复执行
 MIN_EXECUTABLE_FUNDS:          0                    # 最小可执行资金阈值；大于 0 时，低于该值的本轮执行会直接跳过
 ORDER_FINGERPRINT_TTL_SECONDS: 120                  # 相同订单指纹的短窗口幂等保护时长（秒）
+DAILY_EARNINGS_REPORT:                              # 每日收益报告调度配置；影响自动触发时刻、统计窗口和去重日期口径
+  ENABLED:                   true                   # 是否启用每日收益报告自动调度
+  TRIGGER_TIME:              "09:35"               # 自动触发时间；格式固定为 HH:MM
+  TIMEZONE:                  "Asia/Shanghai"       # 调度与统计口径使用的 IANA 时区，例如 Asia/Shanghai / UTC
 
 # =========================
 # 贷出金额控制

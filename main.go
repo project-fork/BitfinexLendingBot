@@ -698,12 +698,23 @@ func (app *Application) endLendingCheck() {
 	app.mainTaskMu.Unlock()
 }
 
-func nextDailyEarningsRun(now time.Time) time.Time {
-	next := time.Date(now.Year(), now.Month(), now.Day(), 9, 35, 0, 0, now.Location())
+func nextDailyEarningsRun(now time.Time, hour int, minute int) time.Time {
+	next := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
 	if !now.Before(next) {
 		next = next.AddDate(0, 0, 1)
 	}
 	return next
+}
+
+func (app *Application) dailyEarningsNow() (time.Time, error) {
+	if app == nil || app.config == nil {
+		return time.Time{}, fmt.Errorf("daily earnings config is not initialized")
+	}
+	loc, err := app.config.GetDailyEarningsLocation()
+	if err != nil {
+		return time.Time{}, err
+	}
+	return time.Now().In(loc), nil
 }
 
 func (app *Application) beginDailyEarningsReport(trigger string) bool {
@@ -795,6 +806,27 @@ func (app *Application) sendDailyEarningsReportWithOptions(now time.Time, credit
 }
 
 func (app *Application) scheduleDailyEarningsReport() {
+	if app == nil || app.config == nil {
+		if app != nil && app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Println("收益报告配置未初始化，跳过收益报告调度器")
+		}
+		return
+	}
+	if !app.config.IsDailyEarningsReportEnabled() {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Println("收益报告自动调度已禁用")
+		}
+		return
+	}
+
+	hour, minute, err := app.config.GetDailyEarningsTriggerClock()
+	if err != nil {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Printf("收益报告触发时间配置无效: %v", err)
+		}
+		return
+	}
+
 	for {
 		select {
 		case <-app.ctx.Done():
@@ -803,17 +835,30 @@ func (app *Application) scheduleDailyEarningsReport() {
 		default:
 		}
 
-		now := time.Now()
-		next := nextDailyEarningsRun(now)
+		now, err := app.dailyEarningsNow()
+		if err != nil {
+			if app.dailyEarningsLogger != nil {
+				app.dailyEarningsLogger.Printf("收益报告时区配置无效: %v", err)
+			}
+			return
+		}
+		next := nextDailyEarningsRun(now, hour, minute)
 		delay := next.Sub(now)
-		app.dailyEarningsLogger.Printf("下次收益日报执行时间: %s, 等待时间: %s", next.Format("2006-01-02 15:04:05"), delay)
+		app.dailyEarningsLogger.Printf(
+			"下次收益报告执行时间: %s (%s), 等待时间: %s",
+			next.Format("2006-01-02 15:04:05"),
+			app.config.GetDailyEarningsTimezone(),
+			delay,
+		)
 
 		select {
 		case <-app.ctx.Done():
 			app.dailyEarningsLogger.Println("收益日报调度器在等待中收到停止信号")
 			return
 		case <-time.After(delay):
-			app.executeDailyEarningsReport("每日 09:35 调度")
+			app.executeDailyEarningsReport(
+				fmt.Sprintf("每日 %02d:%02d 调度 (%s)", hour, minute, app.config.GetDailyEarningsTimezone()),
+			)
 		}
 	}
 }
@@ -838,7 +883,13 @@ func (app *Application) executeDailyEarningsReportNow(trigger string, preview bo
 		return err
 	}
 
-	now := time.Now()
+	now, err := app.dailyEarningsNow()
+	if err != nil {
+		if app.dailyEarningsLogger != nil {
+			app.dailyEarningsLogger.Printf("收益报告时区配置无效: %v", err)
+		}
+		return err
+	}
 	activeCredits, err := app.bfxClient.GetFundingCredits(app.config.GetFundingSymbol())
 	if err != nil {
 		if app.dailyEarningsLogger != nil {

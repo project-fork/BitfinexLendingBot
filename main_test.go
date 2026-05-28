@@ -177,21 +177,37 @@ func TestBeginLendingCheck_RejectsDuplicateExecution(t *testing.T) {
 	}
 }
 
-func TestNextDailyEarningsRun_ComputesNext0935(t *testing.T) {
+func TestNextDailyEarningsRun_ComputesConfiguredClock(t *testing.T) {
 	loc := time.FixedZone("CST", 8*3600)
 
 	now := time.Date(2026, 5, 27, 9, 0, 0, 0, loc)
-	next := nextDailyEarningsRun(now)
+	next := nextDailyEarningsRun(now, 9, 35)
 	expected := time.Date(2026, 5, 27, 9, 35, 0, 0, loc)
 	if !next.Equal(expected) {
 		t.Fatalf("expected next run %v, got %v", expected, next)
 	}
 
 	now = time.Date(2026, 5, 27, 9, 35, 0, 0, loc)
-	next = nextDailyEarningsRun(now)
+	next = nextDailyEarningsRun(now, 9, 35)
 	expected = time.Date(2026, 5, 28, 9, 35, 0, 0, loc)
 	if !next.Equal(expected) {
 		t.Fatalf("expected next run after same-time trigger %v, got %v", expected, next)
+	}
+}
+
+func TestNextDailyEarningsRun_UsesConfiguredTimezoneClock(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatalf("failed to load location: %v", err)
+	}
+
+	// 模拟服务器当前在 UTC，但收益报告按 Asia/Shanghai 计算时间。
+	nowUTC := time.Date(2026, 5, 28, 1, 30, 0, 0, time.UTC)
+	now := nowUTC.In(loc)
+	next := nextDailyEarningsRun(now, 9, 35)
+	expected := time.Date(2026, 5, 28, 9, 35, 0, 0, loc)
+	if !next.Equal(expected) {
+		t.Fatalf("expected configured-zone next run %v, got %v", expected, next)
 	}
 }
 

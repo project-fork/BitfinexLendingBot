@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
 	"github.com/kfrico/BitfinexLendingBot/internal/errors"
@@ -51,6 +52,7 @@ type Config struct {
 	NotifyRateThreshold float64 `mapstructure:"NOTIFY_RATE_THRESHOLD"`
 	ReserveAmount       float64 `mapstructure:"RESERVE_AMOUNT"`
 	NotificationFormat  string  `mapstructure:"NOTIFICATION_FORMAT"`
+	DailyEarningsReport DailyEarningsReportConfig `mapstructure:"DAILY_EARNINGS_REPORT"`
 
 	// 策略设定
 	Strategy                 string  `mapstructure:"STRATEGY"`
@@ -81,6 +83,12 @@ type Config struct {
 	OrderFingerprintTTL      int     `mapstructure:"ORDER_FINGERPRINT_TTL_SECONDS"` // 相同订单指纹的幂等保护窗口（秒）
 }
 
+type DailyEarningsReportConfig struct {
+	Enabled     *bool  `mapstructure:"ENABLED"`
+	TriggerTime string `mapstructure:"TRIGGER_TIME"`
+	Timezone    string `mapstructure:"TIMEZONE"`
+}
+
 // LoadConfig 从文件加载配置
 func LoadConfig(configPath string) (*Config, error) {
 	viper.SetConfigFile(configPath)
@@ -103,6 +111,9 @@ func LoadConfig(configPath string) (*Config, error) {
 
 	// 设置借贷检查间隔的默认值
 	config.setLendingCheckDefaults()
+
+	// 设置收益报告调度默认值
+	config.setDailyEarningsDefaults()
 
 	if err := config.Validate(); err != nil {
 		return nil, err
@@ -228,6 +239,12 @@ func (c *Config) Validate() error {
 	if c.NotificationFormat != "" && c.NotificationFormat != "classic" && c.NotificationFormat != "aligned" {
 		return errors.NewValidationError("NOTIFICATION_FORMAT must be one of: classic, aligned")
 	}
+	if _, _, err := c.GetDailyEarningsTriggerClock(); err != nil {
+		return err
+	}
+	if _, err := c.GetDailyEarningsLocation(); err != nil {
+		return errors.NewValidationError("DAILY_EARNINGS_REPORT.TIMEZONE must be a valid IANA time zone")
+	}
 
 	return nil
 }
@@ -282,6 +299,64 @@ func (c *Config) HasTelegramAuthToken() bool {
 
 func (c *Config) IsTelegramEnabled() bool {
 	return c.HasTelegramBotToken() && c.HasTelegramAuthToken()
+}
+
+func (c *Config) IsDailyEarningsReportEnabled() bool {
+	if c == nil || c.DailyEarningsReport.Enabled == nil {
+		return true
+	}
+	return *c.DailyEarningsReport.Enabled
+}
+
+func (c *Config) GetDailyEarningsTriggerTime() string {
+	if c == nil {
+		return "09:35"
+	}
+	triggerTime := strings.TrimSpace(c.DailyEarningsReport.TriggerTime)
+	if triggerTime == "" {
+		return "09:35"
+	}
+	return triggerTime
+}
+
+func (c *Config) GetDailyEarningsTimezone() string {
+	if c == nil {
+		return "Asia/Shanghai"
+	}
+	timezone := strings.TrimSpace(c.DailyEarningsReport.Timezone)
+	if timezone == "" {
+		return "Asia/Shanghai"
+	}
+	return timezone
+}
+
+func (c *Config) GetDailyEarningsLocation() (*time.Location, error) {
+	return time.LoadLocation(c.GetDailyEarningsTimezone())
+}
+
+func (c *Config) GetDailyEarningsTriggerClock() (int, int, error) {
+	triggerTime := c.GetDailyEarningsTriggerTime()
+	parts := strings.Split(triggerTime, ":")
+	if len(parts) != 2 {
+		return 0, 0, errors.NewValidationError("DAILY_EARNINGS_REPORT.TRIGGER_TIME must be in HH:MM format")
+	}
+	if len(parts[0]) != 2 || len(parts[1]) != 2 {
+		return 0, 0, errors.NewValidationError("DAILY_EARNINGS_REPORT.TRIGGER_TIME must be in HH:MM format")
+	}
+
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, errors.NewValidationError("DAILY_EARNINGS_REPORT.TRIGGER_TIME must be in HH:MM format")
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, errors.NewValidationError("DAILY_EARNINGS_REPORT.TRIGGER_TIME must be in HH:MM format")
+	}
+	if hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, 0, errors.NewValidationError("DAILY_EARNINGS_REPORT.TRIGGER_TIME must be in HH:MM format")
+	}
+
+	return hour, minute, nil
 }
 
 func (c *Config) TelegramDisabledReason() string {
@@ -474,5 +549,18 @@ func (c *Config) setLendingCheckDefaults() {
 	}
 	if c.NotificationFormat == "" {
 		c.NotificationFormat = "classic"
+	}
+}
+
+func (c *Config) setDailyEarningsDefaults() {
+	if c.DailyEarningsReport.Enabled == nil {
+		enabled := true
+		c.DailyEarningsReport.Enabled = &enabled
+	}
+	if strings.TrimSpace(c.DailyEarningsReport.TriggerTime) == "" {
+		c.DailyEarningsReport.TriggerTime = "09:35"
+	}
+	if strings.TrimSpace(c.DailyEarningsReport.Timezone) == "" {
+		c.DailyEarningsReport.Timezone = "Asia/Shanghai"
 	}
 }

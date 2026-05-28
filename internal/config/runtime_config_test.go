@@ -91,6 +91,7 @@ func TestStartupOnlyConfigKeys(t *testing.T) {
 		"BITFINEX_API_KEY",
 		"BITFINEX_SECRET_KEY",
 		"CURRENCY",
+		"DAILY_EARNINGS_REPORT",
 		"FUNDING_BOOK_RATE_UNDERCUT",
 		"GAP_BOTTOM",
 		"GAP_TOP",
