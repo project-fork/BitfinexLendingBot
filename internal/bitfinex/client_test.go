@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,6 +154,83 @@ func TestClassifyBitfinexError_ClassifiesRateLimitString(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), internalerrors.ErrCodeRateLimit) {
 		t.Fatalf("expected rate limit error, got %v", err)
+	}
+}
+
+func TestClassifyBitfinexError_ClassifiesAuthenticationStrings(t *testing.T) {
+	testCases := []string{
+		"apikey invalid (10100)",
+		"digest invalid (10100)",
+		"nonce: small (10114)",
+	}
+
+	for _, input := range testCases {
+		err := classifyBitfinexError("failed", fmt.Errorf(input))
+		if err == nil {
+			t.Fatalf("expected error for %q", input)
+		}
+		if !strings.Contains(err.Error(), internalerrors.ErrCodeAuthentication) {
+			t.Fatalf("expected auth error for %q, got %v", input, err)
+		}
+	}
+}
+
+func TestRetryPrivateRead_RetriesTimeoutOnceThenSucceeds(t *testing.T) {
+	var attempts atomic.Int32
+	client := &Client{}
+
+	err := client.retryPrivateRead("get wallets", func() error {
+		if attempts.Add(1) == 1 {
+			return fmt.Errorf("context deadline exceeded")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+}
+
+func TestRetryPrivateRead_DoesNotRetryNonTimeoutError(t *testing.T) {
+	var attempts atomic.Int32
+	client := &Client{}
+
+	err := client.retryPrivateRead("get wallets", func() error {
+		attempts.Add(1)
+		return fmt.Errorf("apikey invalid (10100)")
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected 1 attempt, got %d", got)
+	}
+	if !strings.Contains(err.Error(), internalerrors.ErrCodeAuthentication) {
+		t.Fatalf("expected auth classification for non-timeout auth error, got %v", err)
+	}
+}
+
+func TestRetryPrivateRead_ReturnsRetriedTimeoutMessage(t *testing.T) {
+	var attempts atomic.Int32
+	client := &Client{}
+
+	err := client.retryPrivateRead("get funding credits", func() error {
+		attempts.Add(1)
+		return fmt.Errorf("context deadline exceeded")
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+	if !strings.Contains(err.Error(), "after 2 attempt(s)") {
+		t.Fatalf("expected retry context in error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), internalerrors.ErrCodeAPITimeout) {
+		t.Fatalf("expected timeout classification, got %v", err)
 	}
 }
 

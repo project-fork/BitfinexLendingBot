@@ -15,6 +15,7 @@ import (
 	"github.com/kfrico/BitfinexLendingBot/internal/bitfinex"
 	"github.com/kfrico/BitfinexLendingBot/internal/config"
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
+	internalerrors "github.com/kfrico/BitfinexLendingBot/internal/errors"
 	"github.com/kfrico/BitfinexLendingBot/internal/formatting"
 	"github.com/kfrico/BitfinexLendingBot/internal/rates"
 	"github.com/kfrico/BitfinexLendingBot/internal/storage"
@@ -1397,9 +1398,20 @@ func (lb *LendingBot) notifyLendingCheckFailure(err error) {
 		return
 	}
 
-	message := fmt.Sprintf("⚠️ 借贷检查连续失败\n\n原因: %s\n\n机器人暂时无法确认新的贷出成交或余额变化，请检查 Bitfinex API key、nonce 状态与是否存在多实例共用同一组 key。", errMsg)
+	message := fmt.Sprintf("⚠️ 借贷检查连续失败\n\n原因: %s\n\n%s", errMsg, lendingCheckFailureGuidance(err))
 	if notifyErr := lb.notifyCallback(message); notifyErr != nil {
 		lb.getLogger().Printf("发送借贷检查失败通知失败: %v", notifyErr)
+	}
+}
+
+func lendingCheckFailureGuidance(err error) string {
+	switch {
+	case internalerrors.HasCode(err, internalerrors.ErrCodeAPITimeout):
+		return "机器人暂时无法确认新的贷出成交或余额变化。这次更像是 Bitfinex 私有 API 或网络链路短时超时，建议优先观察是否自动恢复；若频繁出现，再检查服务器到 Bitfinex 的网络质量。"
+	case internalerrors.HasCode(err, internalerrors.ErrCodeAuthentication):
+		return "机器人暂时无法确认新的贷出成交或余额变化，请检查 Bitfinex API key、权限配置、nonce 状态与是否存在多实例共用同一组 key。"
+	default:
+		return "机器人暂时无法确认新的贷出成交或余额变化，请结合错误类型检查 Bitfinex API 可用性、认证配置以及服务器运行状态。"
 	}
 }
 

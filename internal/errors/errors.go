@@ -1,6 +1,7 @@
 package errors
 
 import (
+	stderrors "errors"
 	"fmt"
 )
 
@@ -20,6 +21,10 @@ func (e *BotError) Error() string {
 
 func (e *BotError) Unwrap() error {
 	return e.Err
+}
+
+func (e *BotError) HasCode(code string) bool {
+	return e != nil && e.Code == code
 }
 
 // 预定义错误代码
@@ -57,6 +62,10 @@ func NewAPIDecodeError(message string, err error) *BotError {
 	return &BotError{Code: ErrCodeAPIDecode, Message: message, Err: err}
 }
 
+func NewAuthenticationError(message string, err error) *BotError {
+	return &BotError{Code: ErrCodeAuthentication, Message: message, Err: err}
+}
+
 func NewConfigError(message string, err error) *BotError {
 	return &BotError{Code: ErrCodeConfig, Message: message, Err: err}
 }
@@ -67,4 +76,9 @@ func NewValidationError(message string) *BotError {
 
 func NewOrderError(message string, err error) *BotError {
 	return &BotError{Code: ErrCodeOrderFailed, Message: message, Err: err}
+}
+
+func HasCode(err error, code string) bool {
+	var botErr *BotError
+	return stderrors.As(err, &botErr) && botErr.HasCode(code)
 }

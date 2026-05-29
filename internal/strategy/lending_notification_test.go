@@ -9,6 +9,7 @@ import (
 
 	"github.com/kfrico/BitfinexLendingBot/internal/bitfinex"
 	"github.com/kfrico/BitfinexLendingBot/internal/config"
+	internalerrors "github.com/kfrico/BitfinexLendingBot/internal/errors"
 	"github.com/kfrico/BitfinexLendingBot/internal/rates"
 	"github.com/kfrico/BitfinexLendingBot/internal/tracker"
 )
@@ -160,6 +161,31 @@ func TestCheckNewLendingCredits_ResetsFailureNotificationAfterRecovery(t *testin
 
 	if len(messages) != 2 {
 		t.Fatalf("expected notifications before and after recovery, got %d (%v)", len(messages), messages)
+	}
+}
+
+func TestLendingCheckFailureGuidance_DistinguishesTimeout(t *testing.T) {
+	err := internalerrors.NewAPITimeoutError("failed to get wallets", errors.New("context deadline exceeded"))
+	message := lendingCheckFailureGuidance(err)
+
+	if !strings.Contains(message, "网络链路短时超时") {
+		t.Fatalf("expected timeout guidance, got %q", message)
+	}
+	if strings.Contains(message, "API key、权限配置、nonce 状态") {
+		t.Fatalf("did not expect auth guidance for timeout, got %q", message)
+	}
+}
+
+func TestLendingCheckFailureGuidance_DistinguishesAuthentication(t *testing.T) {
+	err := &internalerrors.BotError{
+		Code:    internalerrors.ErrCodeAuthentication,
+		Message: "auth failed",
+		Err:     errors.New("apikey invalid"),
+	}
+	message := lendingCheckFailureGuidance(err)
+
+	if !strings.Contains(message, "API key、权限配置、nonce 状态") {
+		t.Fatalf("expected auth guidance, got %q", message)
 	}
 }
 

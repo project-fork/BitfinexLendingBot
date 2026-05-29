@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/common"
+	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/fundingcredit"
 	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/fundingoffer"
 	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/ledger"
+	"github.com/bitfinexcom/bitfinex-api-go/pkg/models/wallet"
 	"github.com/bitfinexcom/bitfinex-api-go/v2/rest"
 
 	"github.com/kfrico/BitfinexLendingBot/internal/constants"
@@ -26,6 +28,8 @@ import (
 const (
 	bitfinexPublicAPIBaseURL = "https://api-pub.bitfinex.com/v2/"
 	bitfinexRequestTimeout   = 15 * time.Second
+	privateReadMaxAttempts   = 2
+	privateReadRetryDelay    = 300 * time.Millisecond
 )
 
 // Client Bitfinex API 客户端封装
@@ -241,9 +245,14 @@ func (c *Client) submitFundingOffer(symbol string, amount float64, dailyRate flo
 
 // GetWallets 获取钱包信息
 func (c *Client) GetWallets() ([]*Wallet, error) {
-	wallets, err := c.restClient.Wallet.Wallet()
+	var wallets *wallet.Snapshot
+	err := c.retryPrivateRead("get wallets", func() error {
+		var callErr error
+		wallets, callErr = c.restClient.Wallet.Wallet()
+		return callErr
+	})
 	if err != nil {
-		return nil, classifyBitfinexError("failed to get wallets", err)
+		return nil, err
 	}
 
 	result := make([]*Wallet, 0, len(wallets.Snapshot))
@@ -373,13 +382,14 @@ func (c *Client) GetCurrentFundingRate(symbol string) (float64, error) {
 
 // GetFundingCredits 获取活跃的借贷订单
 func (c *Client) GetFundingCredits(symbol string) ([]*FundingCredit, error) {
-	credits, err := c.restClient.Funding.Credits(symbol)
+	var credits *fundingcredit.Snapshot
+	err := c.retryPrivateRead("get funding credits", func() error {
+		var callErr error
+		credits, callErr = c.restClient.Funding.Credits(symbol)
+		return callErr
+	})
 	if err != nil {
-		// 处理特殊的空响应错误
-		if strings.Contains(err.Error(), "data slice too short") {
-			return []*FundingCredit{}, nil
-		}
-		return nil, classifyBitfinexError("failed to get funding credits", err)
+		return nil, err
 	}
 
 	// 处理空响应或无数据的情况
@@ -413,12 +423,14 @@ func (c *Client) GetFundingCredits(symbol string) ([]*FundingCredit, error) {
 
 // GetFundingCreditsHistory 获取历史借贷订单
 func (c *Client) GetFundingCreditsHistory(symbol string) ([]*FundingCredit, error) {
-	credits, err := c.restClient.Funding.CreditsHistory(symbol)
+	var credits *fundingcredit.Snapshot
+	err := c.retryPrivateRead("get funding credits history", func() error {
+		var callErr error
+		credits, callErr = c.restClient.Funding.CreditsHistory(symbol)
+		return callErr
+	})
 	if err != nil {
-		if strings.Contains(err.Error(), "data slice too short") {
-			return []*FundingCredit{}, nil
-		}
-		return nil, classifyBitfinexError("failed to get funding credits history", err)
+		return nil, err
 	}
 
 	if credits == nil || credits.Snapshot == nil || len(credits.Snapshot) == 0 {
@@ -450,12 +462,14 @@ func (c *Client) GetFundingCreditsHistory(symbol string) ([]*FundingCredit, erro
 
 // GetLedgers 获取历史账本条目
 func (c *Client) GetLedgers(currency string, start int64, end int64, max int32) ([]*LedgerEntry, error) {
-	ledgers, err := c.restClient.Ledgers.Ledgers(currency, start, end, max)
+	var ledgers *ledger.Snapshot
+	err := c.retryPrivateRead("get ledgers", func() error {
+		var callErr error
+		ledgers, callErr = c.restClient.Ledgers.Ledgers(currency, start, end, max)
+		return callErr
+	})
 	if err != nil {
-		if strings.Contains(err.Error(), "data slice too short") {
-			return []*LedgerEntry{}, nil
-		}
-		return nil, classifyBitfinexError("failed to get ledgers", err)
+		return nil, err
 	}
 
 	if ledgers == nil || ledgers.Snapshot == nil || len(ledgers.Snapshot) == 0 {
@@ -501,12 +515,14 @@ func (c *Client) GetLedgersFiltered(currency string, start int64, end int64, max
 		return nil, err
 	}
 
-	raw, err := c.restClient.Request(req)
+	var raw []interface{}
+	err = c.retryPrivateRead("get filtered ledgers", func() error {
+		var callErr error
+		raw, callErr = c.restClient.Request(req)
+		return callErr
+	})
 	if err != nil {
-		if strings.Contains(err.Error(), "data slice too short") {
-			return []*LedgerEntry{}, nil
-		}
-		return nil, classifyBitfinexError("failed to get filtered ledgers", err)
+		return nil, err
 	}
 
 	snapshot, err := ledger.SnapshotFromRaw(raw, ledger.FromRaw)
@@ -657,6 +673,34 @@ func classifyBitfinexHTTPStatusError(path string, statusCode int, body []byte) e
 	return errors.NewAPIHTTPStatusError(message, nil)
 }
 
+func (c *Client) retryPrivateRead(message string, call func() error) error {
+	var lastErr error
+	for attempt := 1; attempt <= privateReadMaxAttempts; attempt++ {
+		lastErr = call()
+		if lastErr == nil {
+			return nil
+		}
+		if strings.Contains(lastErr.Error(), "data slice too short") {
+			return nil
+		}
+
+		classifiedErr := classifyBitfinexError("failed to "+message, lastErr)
+		if !errors.HasCode(classifiedErr, errors.ErrCodeAPITimeout) {
+			return classifiedErr
+		}
+		if attempt == privateReadMaxAttempts {
+			return errors.NewAPITimeoutError(
+				fmt.Sprintf("failed to %s after %d attempt(s)", message, attempt),
+				lastErr,
+			)
+		}
+
+		time.Sleep(privateReadRetryDelay * time.Duration(attempt))
+	}
+
+	return classifyBitfinexError("failed to "+message, lastErr)
+}
+
 func classifyBitfinexError(message string, err error) error {
 	if err == nil {
 		return nil
@@ -664,6 +708,9 @@ func classifyBitfinexError(message string, err error) error {
 
 	var netErr net.Error
 	lowerErr := strings.ToLower(err.Error())
+	if isBitfinexAuthenticationError(lowerErr) {
+		return errors.NewAuthenticationError(message, err)
+	}
 	if strings.Contains(lowerErr, "rate limit") || strings.Contains(lowerErr, "ratelimit") || strings.Contains(lowerErr, "too many requests") {
 		return errors.NewRateLimitError(message, err)
 	}
@@ -687,6 +734,24 @@ func classifyBitfinexError(message string, err error) error {
 		return errors.NewAPIHTTPStatusError(message, err)
 	}
 	return errors.NewAPIError(message, err)
+}
+
+func isBitfinexAuthenticationError(lowerErr string) bool {
+	authMarkers := []string{
+		"apikey invalid",
+		"api key invalid",
+		"digest invalid",
+		"nonce: small",
+		"invalid x-bfx-apikey",
+		"invalid x-bfx-payload",
+		"invalid x-bfx-signature",
+	}
+	for _, marker := range authMarkers {
+		if strings.Contains(lowerErr, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractIDFromStruct 使用反射从结构体中提取ID字段
