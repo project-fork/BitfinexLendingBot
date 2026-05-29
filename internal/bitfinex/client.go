@@ -70,10 +70,13 @@ func NewClient(apiKey, secretKey string) *Client {
 
 // FundingOffer 代表一个资金贷出订单
 type FundingOffer struct {
-	ID     int64
-	Amount float64
-	Rate   float64 // 日利率（小数格式）
-	Period int
+	ID         int64
+	Amount     float64
+	Rate       float64 // 日利率（小数格式）
+	Period     int
+	Type       string
+	MTSCreated int64
+	MTSUpdated int64
 }
 
 // PendingFundingOffer 代表一个未成交资金贷出订单及其追踪状态
@@ -181,10 +184,13 @@ func (c *Client) GetFundingOffers(symbol string) ([]*FundingOffer, error) {
 			continue
 		}
 		result = append(result, &FundingOffer{
-			ID:     offer.ID,
-			Amount: offer.Amount,
-			Rate:   offer.Rate, // API 已返回日利率
-			Period: int(offer.Period),
+			ID:         offer.ID,
+			Amount:     offer.Amount,
+			Rate:       offer.Rate, // API 已返回日利率
+			Period:     int(offer.Period),
+			Type:       offer.Type,
+			MTSCreated: offer.MTSCreated,
+			MTSUpdated: offer.MTSUpdated,
 		})
 	}
 

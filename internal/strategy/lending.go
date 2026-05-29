@@ -172,6 +172,17 @@ type placeLoanOffersResult struct {
 	RateBonusAppliedCount int
 }
 
+const smartPendingOfferRealignmentMinimumAge = 30 * time.Minute
+const pendingOfferAmountTolerance = 0.01
+
+type pendingOfferVisibility int
+
+const (
+	pendingOfferVisibilityConfigured pendingOfferVisibility = iota
+	pendingOfferVisibilityAll
+	pendingOfferVisibilityTrackedOnly
+)
+
 // Execute 执行机器人主要逻辑（默认不取消既有未成交订单）
 func (lb *LendingBot) Execute() error {
 	return lb.execute(false, "自动触发", false)
@@ -319,7 +330,13 @@ func (lb *LendingBot) execute(cancelTrackedOffers bool, triggerSource string, by
 		loanOffers = lb.simpleStrategy.CalculateOffers(fundsAvailable, fundingBook)
 	case config.StrategySmart:
 		logger.Println("使用智能策略计算贷出订单...")
-		loanOffers = lb.smartStrategy.CalculateSmartOffers(fundsAvailable, fundingBook)
+		loanOffers, hasPendingOrders, err = lb.calculateSmartOffersWithRealignment(fundsAvailable, fundingBook, hasPendingOrders, decisionSummary)
+		if err != nil {
+			decisionSummary.SkipReason = "智能策略重对齐评估失败"
+			decisionSummary.Notes = append(decisionSummary.Notes, fmt.Sprintf("智能策略重对齐评估失败: %v", err))
+			lb.storeAndLogDecisionSummary(logger, decisionSummary)
+			return err
+		}
 	default:
 		logger.Println("使用传统策略计算贷出订单...")
 		loanOffers = lb.calculateLoanOffers(fundsAvailable, fundingBook)
@@ -357,7 +374,7 @@ func (lb *LendingBot) execute(cancelTrackedOffers bool, triggerSource string, by
 }
 
 func (lb *LendingBot) hasTrackedPendingOffers() (bool, error) {
-	offers, err := lb.ListPendingFundingOffers()
+	offers, err := lb.listPendingFundingOffersByVisibility(pendingOfferVisibilityTrackedOnly)
 	if err != nil {
 		return false, err
 	}
@@ -383,6 +400,14 @@ func (lb *LendingBot) cancelAllOffers() (bool, error) {
 
 // ListPendingFundingOffers 获取当前币种的未成交订单，并标记是否为程序追踪订单。
 func (lb *LendingBot) ListPendingFundingOffers() ([]*bitfinex.PendingFundingOffer, error) {
+	return lb.listPendingFundingOffersByVisibility(pendingOfferVisibilityAll)
+}
+
+func (lb *LendingBot) listStrategyVisiblePendingFundingOffers() ([]*bitfinex.PendingFundingOffer, error) {
+	return lb.listPendingFundingOffersByVisibility(pendingOfferVisibilityConfigured)
+}
+
+func (lb *LendingBot) listPendingFundingOffersByVisibility(visibility pendingOfferVisibility) ([]*bitfinex.PendingFundingOffer, error) {
 	offers, err := lb.client.GetFundingOffers(lb.config.GetFundingSymbol())
 	if err != nil {
 		return nil, err
@@ -393,19 +418,156 @@ func (lb *LendingBot) ListPendingFundingOffers() ([]*bitfinex.PendingFundingOffe
 		if offer == nil {
 			continue
 		}
-		result = append(result, &bitfinex.PendingFundingOffer{
+		pendingOffer := &bitfinex.PendingFundingOffer{
 			FundingOffer: *offer,
 			IsTracked:    lb.orderTracker.IsTrackedOrder(offer.ID),
-		})
+		}
+		if !lb.shouldIncludePendingOffer(pendingOffer, visibility) {
+			continue
+		}
+		result = append(result, pendingOffer)
 	}
 
 	return result, nil
 }
 
+func (lb *LendingBot) shouldIncludePendingOffer(offer *bitfinex.PendingFundingOffer, visibility pendingOfferVisibility) bool {
+	if offer == nil {
+		return false
+	}
+
+	switch visibility {
+	case pendingOfferVisibilityAll:
+		return true
+	case pendingOfferVisibilityTrackedOnly:
+		return offer.IsTracked
+	default:
+		if lb == nil || lb.config == nil {
+			return offer.IsTracked
+		}
+		if lb.config.IncludeManualPendingOffersInStrategyFunds {
+			return true
+		}
+		return offer.IsTracked
+	}
+}
+
+func (lb *LendingBot) calculateSmartOffersWithRealignment(
+	fundsAvailable float64,
+	fundingBook []*bitfinex.FundingBookEntry,
+	hasPendingOrders bool,
+	decisionSummary *StrategyDecisionSummary,
+) ([]*LoanOffer, bool, error) {
+	visibleOffers, err := lb.listStrategyVisiblePendingFundingOffers()
+	if err != nil {
+		return nil, hasPendingOrders, err
+	}
+
+	visiblePendingAmount := sumPendingOfferAmounts(visibleOffers)
+	totalFundsForTarget := floorToCents(fundsAvailable + visiblePendingAmount)
+	targetOffers := lb.smartStrategy.CalculateSmartOffers(totalFundsForTarget, fundingBook)
+
+	if len(visibleOffers) == 0 {
+		return targetOffers, hasPendingOrders, nil
+	}
+
+	if containsUnsupportedRealignmentOfferType(visibleOffers) {
+		if decisionSummary != nil {
+			decisionSummary.Notes = append(decisionSummary.Notes, "智能策略重对齐跳过：当前可见未成交订单包含 FRR 或其他不支持自动重对齐的类型")
+		}
+		return nil, hasPendingOrders, nil
+	}
+
+	if !lb.areAllPendingOffersOldEnough(visibleOffers, smartPendingOfferRealignmentMinimumAge) {
+		if decisionSummary != nil {
+			decisionSummary.Notes = append(decisionSummary.Notes,
+				fmt.Sprintf("智能策略重对齐跳过：当前可见未成交订单未满 %s", smartPendingOfferRealignmentMinimumAge.Round(time.Minute)))
+		}
+		return nil, true, nil
+	}
+
+	currentOffers := pendingOffersToLoanOffers(visibleOffers)
+	if pendingOffersEquivalentToLoanOffers(currentOffers, targetOffers) {
+		if decisionSummary != nil {
+			decisionSummary.Notes = append(decisionSummary.Notes, "智能策略重对齐跳过：当前可见未成交订单已与目标订单一致")
+		}
+		return nil, true, nil
+	}
+
+	cancelSummary, err := lb.CancelPendingFundingOffers(lb.shouldIncludeManualPendingOffers())
+	if err != nil {
+		return nil, hasPendingOrders, err
+	}
+	if cancelSummary.Failed > 0 {
+		if decisionSummary != nil {
+			decisionSummary.Notes = append(decisionSummary.Notes,
+				fmt.Sprintf("智能策略重对齐跳过：撤单结果 %d 成功，%d 失败，保留现有挂单避免新旧订单并存", cancelSummary.Cancelled, cancelSummary.Failed))
+		}
+		return nil, true, nil
+	}
+	if decisionSummary != nil {
+		decisionSummary.Notes = append(decisionSummary.Notes,
+			fmt.Sprintf("智能策略重对齐：已取消 %d 笔未成交订单，将按目标订单整组重挂", cancelSummary.Cancelled))
+	}
+	return targetOffers, true, nil
+}
+
+func (lb *LendingBot) shouldIncludeManualPendingOffers() bool {
+	return lb != nil && lb.config != nil && lb.config.IncludeManualPendingOffersInStrategyFunds
+}
+
+func (lb *LendingBot) areAllPendingOffersOldEnough(offers []*bitfinex.PendingFundingOffer, minAge time.Duration) bool {
+	if len(offers) == 0 {
+		return false
+	}
+
+	now := time.Now()
+	for _, offer := range offers {
+		createdAt, ok := lb.pendingOfferCreatedAt(offer)
+		if !ok || now.Sub(createdAt) < minAge {
+			return false
+		}
+	}
+	return true
+}
+
+func (lb *LendingBot) pendingOfferCreatedAt(offer *bitfinex.PendingFundingOffer) (time.Time, bool) {
+	if offer == nil {
+		return time.Time{}, false
+	}
+	if offer.MTSCreated > 0 {
+		return time.UnixMilli(offer.MTSCreated), true
+	}
+	if lb != nil && lb.orderTracker != nil && offer.IsTracked {
+		createdAt, ok := lb.orderTracker.GetOrderCreatedAt(offer.ID)
+		if ok && !createdAt.IsZero() {
+			return createdAt, true
+		}
+	}
+	return time.Time{}, false
+}
+
+func containsUnsupportedRealignmentOfferType(offers []*bitfinex.PendingFundingOffer) bool {
+	for _, offer := range offers {
+		if offer == nil {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(offer.Type), constants.OfferTypeFRRDeltaVar) {
+			return true
+		}
+	}
+	return false
+}
+
 // CancelPendingFundingOffers 取消当前币种的未成交订单。
 // includeAll 为 false 时，仅取消程序追踪到的订单；为 true 时取消全部未成交订单。
 func (lb *LendingBot) CancelPendingFundingOffers(includeAll bool) (*bitfinex.FundingOfferCancelSummary, error) {
-	offers, err := lb.ListPendingFundingOffers()
+	visibility := pendingOfferVisibilityTrackedOnly
+	if includeAll {
+		visibility = pendingOfferVisibilityAll
+	}
+
+	offers, err := lb.listPendingFundingOffersByVisibility(visibility)
 	if err != nil {
 		return nil, err
 	}
@@ -419,12 +581,6 @@ func (lb *LendingBot) CancelPendingFundingOffers(includeAll bool) (*bitfinex.Fun
 	}
 
 	for _, offer := range offers {
-		if !includeAll && !offer.IsTracked {
-			lb.getLogger().Printf("跳过手动创建的订单 ID: %d", offer.ID)
-			summary.Skipped++
-			continue
-		}
-
 		if err := lb.client.CancelFundingOffer(offer.ID); err != nil {
 			lb.getLogger().Printf("取消程序订单失败: %v", err)
 			summary.Failed++
@@ -436,7 +592,7 @@ func (lb *LendingBot) CancelPendingFundingOffers(includeAll bool) (*bitfinex.Fun
 	}
 
 	if summary.Cancelled == 0 {
-		lb.getLogger().Println("没有程序创建的订单需要取消")
+		lb.getLogger().Println("没有符合条件的未成交订单需要取消")
 	}
 
 	return summary, nil
@@ -963,6 +1119,94 @@ func sumOfferAmounts(offers []*LoanOffer) float64 {
 		total += offer.Amount
 	}
 	return total
+}
+
+func sumPendingOfferAmounts(offers []*bitfinex.PendingFundingOffer) float64 {
+	total := 0.0
+	for _, offer := range offers {
+		if offer == nil {
+			continue
+		}
+		total += floorToCents(offer.Amount)
+	}
+	return floorToCents(total)
+}
+
+func pendingOffersToLoanOffers(offers []*bitfinex.PendingFundingOffer) []*LoanOffer {
+	if len(offers) == 0 {
+		return nil
+	}
+
+	converted := make([]*LoanOffer, 0, len(offers))
+	for _, offer := range offers {
+		if offer == nil {
+			continue
+		}
+		converted = append(converted, &LoanOffer{
+			Amount: floorToCents(offer.Amount),
+			Rate:   offer.Rate,
+			Period: offer.Period,
+		})
+	}
+	return converted
+}
+
+func pendingOffersEquivalentToLoanOffers(current []*LoanOffer, target []*LoanOffer) bool {
+	if len(current) != len(target) {
+		return false
+	}
+
+	normalizedCurrent := normalizeLoanOffersForComparison(current)
+	normalizedTarget := normalizeLoanOffersForComparison(target)
+	for i := range normalizedCurrent {
+		if normalizedCurrent[i].UseFRR != normalizedTarget[i].UseFRR {
+			return false
+		}
+		if normalizedCurrent[i].Period != normalizedTarget[i].Period {
+			return false
+		}
+		if normalizedCurrent[i].Rate != normalizedTarget[i].Rate {
+			return false
+		}
+		if math.Abs(normalizedCurrent[i].Amount-normalizedTarget[i].Amount) > pendingOfferAmountTolerance {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeLoanOffersForComparison(offers []*LoanOffer) []*LoanOffer {
+	if len(offers) == 0 {
+		return nil
+	}
+
+	normalized := make([]*LoanOffer, 0, len(offers))
+	for _, offer := range offers {
+		if offer == nil {
+			continue
+		}
+		copied := *offer
+		copied.Amount = floorToCents(copied.Amount)
+		normalized = append(normalized, &copied)
+	}
+
+	sort.Slice(normalized, func(i, j int) bool {
+		if normalized[i].Rate != normalized[j].Rate {
+			return normalized[i].Rate < normalized[j].Rate
+		}
+		if normalized[i].Period != normalized[j].Period {
+			return normalized[i].Period < normalized[j].Period
+		}
+		if normalized[i].Amount != normalized[j].Amount {
+			return normalized[i].Amount < normalized[j].Amount
+		}
+		if normalized[i].UseFRR != normalized[j].UseFRR {
+			return !normalized[i].UseFRR && normalized[j].UseFRR
+		}
+		return false
+	})
+
+	return normalized
 }
 
 func (lb *LendingBot) shouldBlockByCooldown(bypassCooldown bool) (bool, time.Duration) {

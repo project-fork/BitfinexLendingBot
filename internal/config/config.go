@@ -81,6 +81,7 @@ type Config struct {
 	ExecutionCooldownSeconds int     `mapstructure:"EXECUTION_COOLDOWN_SECONDS"`    // 主策略执行冷却时间（秒）
 	MinExecutableFunds       float64 `mapstructure:"MIN_EXECUTABLE_FUNDS"`          // 本轮允许继续生成/提交订单的最小总资金阈值
 	OrderFingerprintTTL      int     `mapstructure:"ORDER_FINGERPRINT_TTL_SECONDS"` // 相同订单指纹的幂等保护窗口（秒）
+	IncludeManualPendingOffersInStrategyFunds bool `mapstructure:"INCLUDE_MANUAL_PENDING_OFFERS_IN_STRATEGY_FUNDS"` // 统一未成交订单接口是否包含手动挂单
 }
 
 type DailyEarningsReportConfig struct {

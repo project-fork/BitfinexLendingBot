@@ -70,6 +70,15 @@ func (t *BotOrderTracker) GetTrackedOrders() []int64 {
 	return orders
 }
 
+// GetOrderCreatedAt returns the tracked creation time for an order if present.
+func (t *BotOrderTracker) GetOrderCreatedAt(orderID int64) (time.Time, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	createdAt, ok := t.createdOrders[orderID]
+	return createdAt, ok
+}
+
 // CleanOldOrders removes stale tracking records to prevent unbounded growth.
 func (t *BotOrderTracker) CleanOldOrders(maxAge time.Duration) {
 	t.mu.Lock()
