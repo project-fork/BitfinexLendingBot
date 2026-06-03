@@ -48,9 +48,19 @@ type Bot struct {
 	logger              *log.Logger
 	sendMessageFunc     func(chatID int64, text string) error
 	sendChattableFunc   func(c tgbotapi.Chattable) error
+	sendChattableWithResponseFunc func(c tgbotapi.Chattable) (tgbotapi.Message, error)
 	answerCallbackFunc  func(config tgbotapi.CallbackConfig) error
-	pendingReplies      map[int64]string
+	pendingReplies      map[int64]pendingReply
 	pendingRepliesMu    sync.Mutex
+}
+
+type pendingReply struct {
+	Command         string
+	ExpireAt        time.Time
+	CreatedAt       time.Time
+	PromptMessageID int
+	PromptText      string
+	Token           string
 }
 
 type telegramCommand struct {
@@ -73,7 +83,7 @@ func NewBot(cfg *config.Config, bfxClient *bitfinex.Client) (*Bot, error) {
 		rateConverter:  rates.NewConverter(),
 		dataFilePath:   storage.DefaultDataFilePath(),
 		logger:         log.New(os.Stderr, "[TelegramBot] ", log.LstdFlags|log.Lmsgprefix),
-		pendingReplies: make(map[int64]string),
+		pendingReplies: make(map[int64]pendingReply),
 	}
 	bot.logger.Printf("Authorized on account %s", api.Self.UserName)
 	bot.loadPersistentData()
@@ -244,15 +254,27 @@ func (b *Bot) StartWithContext(ctx context.Context) {
 func (b *Bot) handleMessage(message *tgbotapi.Message) {
 	chatID := message.Chat.ID
 	text := message.Text
+	hasReplyTo := message.ReplyToMessage != nil
 
 	// 处理身份验证
 	if !b.isAuthenticated(chatID) {
+		b.getLogger().Printf("收到 Telegram 消息: chat_id=%d authenticated=false has_reply_to=%t text=%q", chatID, hasReplyTo, text)
 		b.handleAuthentication(chatID, text)
 		return
 	}
 
-	if b.handlePendingReply(message) {
-		return
+	if pendingCommand, ok := b.getPendingReply(chatID); ok {
+		b.getLogger().Printf("收到 Telegram 消息: chat_id=%d authenticated=true has_reply_to=%t pending_command=%q text=%q", chatID, hasReplyTo, pendingCommand, text)
+	} else {
+		b.getLogger().Printf("收到 Telegram 消息: chat_id=%d authenticated=true has_reply_to=%t pending_command=<none> text=%q", chatID, hasReplyTo, text)
+	}
+
+	if pendingReply, ok := b.getPendingReplyState(chatID); ok {
+		if strings.HasPrefix(strings.TrimSpace(text), "/") {
+			b.resolvePendingReply(chatID, pendingReply, pendingReplyStatusReplaced)
+		} else if b.handlePendingReply(message, pendingReply) {
+			return
+		}
 	}
 
 	// 处理已验证用户的指令
@@ -401,7 +423,7 @@ func (b *Bot) saveRuntimeConfig() error {
 	}
 
 	snapshot := b.ensureRuntimeConfig().Snapshot()
-	minDailyLendRate := snapshot.GetMinDailyRateDisplay()
+	minDailyLendRate := persistedMinDailyLendRate(snapshot)
 
 	return storage.UpdateData(b.dataFilePath, func(state *storage.Data) {
 		state.RuntimeConfig = storage.RuntimeConfigData{
@@ -420,6 +442,13 @@ func (b *Bot) saveRuntimeConfig() error {
 			KlineSmoothMethod:        stringPtr(snapshot.KlineSmoothMethod),
 		}
 	})
+}
+
+func persistedMinDailyLendRate(cfg config.Config) string {
+	if cfg.IsMinDailyLendRateFRR() {
+		return constants.MinDailyRateModeFRR
+	}
+	return fmt.Sprintf("%.4f", cfg.GetMinDailyRatePercentage())
 }
 
 func (b *Bot) updateRuntimeConfig(update func(*config.RuntimeConfigService) error) error {
@@ -463,6 +492,16 @@ func (b *Bot) sendChattable(c tgbotapi.Chattable) error {
 	return err
 }
 
+func (b *Bot) sendChattableWithResponse(c tgbotapi.Chattable) (tgbotapi.Message, error) {
+	if b.sendChattableWithResponseFunc != nil {
+		return b.sendChattableWithResponseFunc(c)
+	}
+	if b.sendChattableFunc != nil {
+		return tgbotapi.Message{}, b.sendChattableFunc(c)
+	}
+	return b.api.Send(c)
+}
+
 func (b *Bot) answerCallback(config tgbotapi.CallbackConfig) error {
 	if b.answerCallbackFunc != nil {
 		return b.answerCallbackFunc(config)
@@ -471,26 +510,69 @@ func (b *Bot) answerCallback(config tgbotapi.CallbackConfig) error {
 	return err
 }
 
-func (b *Bot) setPendingReply(chatID int64, command string) {
+func (b *Bot) setPendingReply(chatID int64, command string, ttl time.Duration, promptMessageID int, promptText string) pendingReply {
 	b.pendingRepliesMu.Lock()
 	defer b.pendingRepliesMu.Unlock()
 	if b.pendingReplies == nil {
-		b.pendingReplies = make(map[int64]string)
+		b.pendingReplies = make(map[int64]pendingReply)
 	}
-	b.pendingReplies[chatID] = command
+	now := time.Now()
+	reply := pendingReply{
+		Command:         command,
+		CreatedAt:       now,
+		ExpireAt:        now.Add(ttl),
+		PromptMessageID: promptMessageID,
+		PromptText:      promptText,
+		Token:           fmt.Sprintf("%d", now.UnixNano()),
+	}
+	b.pendingReplies[chatID] = reply
+	return reply
 }
 
 func (b *Bot) getPendingReply(chatID int64) (string, bool) {
+	reply, ok := b.getPendingReplyState(chatID)
+	if !ok {
+		return "", false
+	}
+	return reply.Command, true
+}
+
+func (b *Bot) getPendingReplyState(chatID int64) (pendingReply, bool) {
+	return b.getPendingReplyStateWithExpiry(chatID, true)
+}
+
+func (b *Bot) getPendingReplyStateIgnoringExpiry(chatID int64) (pendingReply, bool) {
+	return b.getPendingReplyStateWithExpiry(chatID, false)
+}
+
+func (b *Bot) getPendingReplyStateWithExpiry(chatID int64, expire bool) (pendingReply, bool) {
 	b.pendingRepliesMu.Lock()
 	defer b.pendingRepliesMu.Unlock()
-	command, ok := b.pendingReplies[chatID]
-	return command, ok
+	reply, ok := b.pendingReplies[chatID]
+	if !ok {
+		return pendingReply{}, false
+	}
+	if expire && !reply.ExpireAt.IsZero() && time.Now().After(reply.ExpireAt) {
+		delete(b.pendingReplies, chatID)
+		return pendingReply{}, false
+	}
+	return reply, true
 }
 
 func (b *Bot) clearPendingReply(chatID int64) {
 	b.pendingRepliesMu.Lock()
 	defer b.pendingRepliesMu.Unlock()
 	delete(b.pendingReplies, chatID)
+}
+
+func (b *Bot) popPendingReply(chatID int64) (pendingReply, bool) {
+	b.pendingRepliesMu.Lock()
+	defer b.pendingRepliesMu.Unlock()
+	reply, ok := b.pendingReplies[chatID]
+	if ok {
+		delete(b.pendingReplies, chatID)
+	}
+	return reply, ok
 }
 
 // SendNotification 发送通知（公开方法供外部调用）
@@ -629,17 +711,17 @@ func (b *Bot) handleHelp(chatID int64) {
 /earningspreview - 发送收益日报预览（不写已发送状态）
 
 ⚙️ 设置指令:
-/threshold [数值] - 设置利率通知阈值
+/threshold [数值] - 设置利率通知阈值，输入 0.03 表示 0.03%
 /reserve [数值] - 设置不参与借贷的保留金额
-/orderlimit [数值] - 设置单次执行最大下单数量限制
-/loandays [数值] - 设置固定借贷天数 (设为0使用自动判断)
-/mindailylendrate [数值|FRR] - 设置最低每日贷出利率（FRR 为浮动利率模式）
+/orderlimit [数值] - 设置单次执行最多提交的订单数量
+/loandays [数值] - 设置固定借贷天数，0 表示自动判断
+/mindailylendrate [数值|FRR] - 设置最低每日贷出利率，或切换到 FRR 模式
 /minloan [数值] - 设置单笔最小贷出金额
-/maxloan [数值] - 设置单笔最大贷出金额 (设为0无限制)
-/highholdrate [数值] - 设置高额持有策略的日利率
-/highholdamount [数值] - 设置高额持有策略的金额 (设为0关闭)
+/maxloan [数值] - 设置单笔最大贷出金额，0 表示无限制
+/highholdrate [数值] - 设置高额持有策略的目标日利率
+/highholdamount [数值] - 设置高额持有策略触发金额，0 表示关闭
 /highholdorders [数值] - 设置高额持有策略的订单数量
-/raterangeincrease [数值] - 设置利率范围增加百分比 (0-100%)
+/raterangeincrease [数值] - 设置分散挂单利率扩展幅度，输入 10 表示 10%
 
 🧠 策略指令:
 /klinestrategy on - 切换到K线策略

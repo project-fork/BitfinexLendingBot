@@ -425,6 +425,7 @@ func (c *Config) parseMinDailyLendRate() (float64, bool, error) {
 		if strings.EqualFold(trimmedValue, constants.MinDailyRateModeFRR) {
 			return 0, true, nil
 		}
+		trimmedValue = strings.TrimSuffix(trimmedValue, "%")
 		rate, err := strconv.ParseFloat(trimmedValue, 64)
 		if err != nil {
 			return 0, false, errors.NewValidationError("MIN_DAILY_LEND_RATE must be a positive number or FRR")

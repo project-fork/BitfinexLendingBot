@@ -146,6 +146,85 @@ func TestBotPersistsRuntimeConfigAndRestoresOnReload(t *testing.T) {
 	}
 }
 
+func TestBotPersistsMinDailyLendRateAsRawValue(t *testing.T) {
+	dataFile := filepath.Join(t.TempDir(), "data.json")
+	cfg := &config.Config{
+		Currency:         "USD",
+		MinLoan:          150,
+		MaxLoan:          500,
+		HighHoldRate:     0.05,
+		HighHoldOrders:   1,
+		MinDailyLendRate: 0.02,
+	}
+
+	bot := &Bot{
+		config:        cfg,
+		runtimeConfig: config.NewRuntimeConfigService(cfg),
+		dataFilePath:  dataFile,
+	}
+
+	if err := bot.updateRuntimeConfig(func(runtimeConfig *config.RuntimeConfigService) error {
+		return runtimeConfig.SetMinDailyLendRate(0.031)
+	}); err != nil {
+		t.Fatalf("expected runtime config to persist, got error: %v", err)
+	}
+
+	updated, err := os.ReadFile(dataFile)
+	if err != nil {
+		t.Fatalf("failed to read updated data: %v", err)
+	}
+	var parsed struct {
+		RuntimeConfig struct {
+			MinDailyLendRate *string `json:"min_daily_lend_rate"`
+		} `json:"runtime_config"`
+	}
+	if err := json.Unmarshal(updated, &parsed); err != nil {
+		t.Fatalf("failed to parse updated data: %v", err)
+	}
+	if parsed.RuntimeConfig.MinDailyLendRate == nil {
+		t.Fatal("expected min_daily_lend_rate to be persisted")
+	}
+	if got := *parsed.RuntimeConfig.MinDailyLendRate; got != "0.0310" {
+		t.Fatalf("expected min_daily_lend_rate to persist raw value 0.0310, got %q", got)
+	}
+}
+
+func TestBotLoadsLegacyPercentMinDailyLendRate(t *testing.T) {
+	dataFile := filepath.Join(t.TempDir(), "data.json")
+	initial := map[string]any{
+		"runtime_config": map[string]any{
+			"min_daily_lend_rate": "0.0310%",
+		},
+	}
+	data, err := json.Marshal(initial)
+	if err != nil {
+		t.Fatalf("failed to marshal initial data: %v", err)
+	}
+	if err := os.WriteFile(dataFile, data, 0600); err != nil {
+		t.Fatalf("failed to write initial data: %v", err)
+	}
+
+	cfg := &config.Config{
+		Currency:         "USD",
+		MinLoan:          150,
+		MaxLoan:          500,
+		HighHoldRate:     0.05,
+		HighHoldOrders:   1,
+		MinDailyLendRate: 0.02,
+	}
+	bot := &Bot{
+		config:        cfg,
+		runtimeConfig: config.NewRuntimeConfigService(cfg),
+		dataFilePath:  dataFile,
+	}
+
+	bot.loadPersistentData()
+
+	if got := bot.config.GetMinDailyRateDisplay(); got != "0.0310%" {
+		t.Fatalf("expected legacy percent min daily rate to restore as 0.0310%%, got %q", got)
+	}
+}
+
 func TestBotPersistsRuntimeConfigWithoutRemovingTrackedOrdersOrAuthChatID(t *testing.T) {
 	dataFile := filepath.Join(t.TempDir(), "data.json")
 	initial := map[string]any{

@@ -283,31 +283,168 @@ func (b *Bot) buildAlignedPendingOffersMessage(offers []*bitfinex.PendingFunding
 	return message
 }
 
-func (b *Bot) handlePendingReply(message *tgbotapi.Message) bool {
+type pendingReplyStatus string
+
+const (
+	pendingReplyStatusCanceled pendingReplyStatus = "canceled"
+	pendingReplyStatusExpired  pendingReplyStatus = "expired"
+	pendingReplyStatusReplaced pendingReplyStatus = "replaced"
+)
+
+func (b *Bot) handlePendingReply(message *tgbotapi.Message, reply pendingReply) bool {
 	if message == nil || message.Chat == nil {
 		return false
 	}
 
-	command, ok := b.getPendingReply(message.Chat.ID)
-	if !ok {
+	if strings.TrimSpace(message.Text) == "" {
 		return false
 	}
 
-	if message.ReplyToMessage == nil {
-		return false
-	}
-
-	b.clearPendingReply(message.Chat.ID)
-	b.handleCommand(message.Chat.ID, fmt.Sprintf("%s %s", command, strings.TrimSpace(message.Text)))
+	commandText := fmt.Sprintf("%s %s", reply.Command, strings.TrimSpace(message.Text))
+	b.getLogger().Printf("Telegram pending reply 命中: chat_id=%d command=%q text=%q", message.Chat.ID, reply.Command, strings.TrimSpace(message.Text))
+	b.handleCommand(message.Chat.ID, commandText)
 	return true
 }
 
+const pendingReplyTTL = 5 * time.Minute
+
 func (b *Bot) requestCommandArgument(chatID int64, command string, prompt string) {
-	b.setPendingReply(chatID, command)
 	msg := tgbotapi.NewMessage(chatID, prompt)
-	msg.ReplyMarkup = tgbotapi.ForceReply{ForceReply: true}
-	if err := b.sendChattable(msg); err != nil {
+	msg.ReplyMarkup = tgbotapi.NewInlineKeyboardMarkup(
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("取消设置", "cancel:pendingreply:placeholder"),
+		),
+	)
+	sent, err := b.sendChattableWithResponse(msg)
+	if err != nil {
 		_ = b.sendMessage(chatID, "❌ 发送参数输入提示失败")
+		return
+	}
+	reply := b.setPendingReply(chatID, command, pendingReplyTTL, sent.MessageID, prompt)
+
+	editMarkup := tgbotapi.NewEditMessageReplyMarkup(
+		chatID,
+		sent.MessageID,
+		tgbotapi.NewInlineKeyboardMarkup(
+			tgbotapi.NewInlineKeyboardRow(
+				tgbotapi.NewInlineKeyboardButtonData("取消设置", fmt.Sprintf("cancel:pendingreply:%s", reply.Token)),
+			),
+		),
+	)
+	if err := b.sendChattable(editMarkup); err != nil {
+		b.getLogger().Printf("更新取消设置按钮失败: chat_id=%d command=%q err=%v", chatID, command, err)
+	}
+
+	go b.schedulePendingReplyExpiry(chatID, reply)
+}
+
+func (b *Bot) buildPromptWithCurrentValue(prompt string, currentValue string) string {
+	if strings.TrimSpace(currentValue) == "" {
+		return prompt
+	}
+	return fmt.Sprintf("%s\n\n当前值：%s", prompt, currentValue)
+}
+
+func (b *Bot) schedulePendingReplyExpiry(chatID int64, reply pendingReply) {
+	if reply.ExpireAt.IsZero() {
+		return
+	}
+
+	timer := time.NewTimer(time.Until(reply.ExpireAt))
+	defer timer.Stop()
+
+	<-timer.C
+
+	currentReply, ok := b.getPendingReplyStateIgnoringExpiry(chatID)
+	if !ok || currentReply.Token != reply.Token {
+		return
+	}
+
+	b.resolvePendingReply(chatID, currentReply, pendingReplyStatusExpired)
+}
+
+func (b *Bot) resolvePendingReply(chatID int64, reply pendingReply, status pendingReplyStatus) {
+	currentReply, ok := b.getPendingReplyState(chatID)
+	if !ok || currentReply.Token != reply.Token {
+		return
+	}
+
+	b.clearPendingReply(chatID)
+
+	switch status {
+	case pendingReplyStatusCanceled:
+		b.updatePendingReplyPromptState(chatID, reply, "本次设置已取消", "已取消")
+	case pendingReplyStatusExpired:
+		b.updatePendingReplyPromptState(chatID, reply, "本次设置已超时，请重新发送设置命令。", "已超时")
+		_ = b.sendMessage(chatID, fmt.Sprintf("%s 的待输入已超时失效，请重新发送命令后再输入参数。", reply.Command))
+	case pendingReplyStatusReplaced:
+		b.updatePendingReplyPromptState(chatID, reply, "本次设置已被新的命令替换。", "已替换")
+	}
+}
+
+func (b *Bot) updatePendingReplyPromptState(chatID int64, reply pendingReply, notice string, buttonText string) {
+	if reply.PromptMessageID == 0 {
+		return
+	}
+
+	text := reply.PromptText
+	if strings.TrimSpace(notice) != "" {
+		text = fmt.Sprintf("%s\n\n%s", reply.PromptText, notice)
+	}
+
+	editText := tgbotapi.NewEditMessageText(chatID, reply.PromptMessageID, text)
+	editText.ReplyMarkup = &tgbotapi.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{
+			{
+				tgbotapi.NewInlineKeyboardButtonData(buttonText, "noop:pendingreply"),
+			},
+		},
+	}
+	if err := b.sendChattable(editText); err != nil {
+		b.getLogger().Printf("更新待输入提示消息状态失败: chat_id=%d command=%q err=%v", chatID, reply.Command, err)
+	}
+}
+
+func (b *Bot) currentValueText(command string) string {
+	cfg := b.ensureRuntimeConfig().Snapshot()
+
+	switch command {
+	case "/threshold":
+		return fmt.Sprintf("%.4f%%", cfg.NotifyRateThreshold)
+	case "/reserve":
+		return fmt.Sprintf("%.2f %s", cfg.ReserveAmount, cfg.Currency)
+	case "/orderlimit":
+		return fmt.Sprintf("%d", cfg.OrderLimit)
+	case "/loandays":
+		if cfg.LoanDays == 0 {
+			return "自动判断"
+		}
+		return fmt.Sprintf("%d 天", cfg.LoanDays)
+	case "/mindailylendrate":
+		if cfg.IsMinDailyLendRateFRR() {
+			return "FRR"
+		}
+		return cfg.GetMinDailyRateDisplay()
+	case "/minloan":
+		return fmt.Sprintf("%.2f %s", cfg.MinLoan, cfg.Currency)
+	case "/maxloan":
+		if cfg.MaxLoan == 0 {
+			return "无限制"
+		}
+		return fmt.Sprintf("%.2f %s", cfg.MaxLoan, cfg.Currency)
+	case "/highholdrate":
+		return fmt.Sprintf("%.4f%%", cfg.HighHoldRate)
+	case "/highholdamount":
+		if cfg.HighHoldAmount == 0 {
+			return "已关闭"
+		}
+		return fmt.Sprintf("%.2f %s", cfg.HighHoldAmount, cfg.Currency)
+	case "/highholdorders":
+		return fmt.Sprintf("%d", cfg.HighHoldOrders)
+	case "/raterangeincrease":
+		return fmt.Sprintf("%.2f%%", cfg.RateRangeIncreasePercent*100)
+	default:
+		return ""
 	}
 }
 
@@ -315,7 +452,7 @@ func (b *Bot) requestCommandArgument(chatID int64, command string, prompt string
 func (b *Bot) handleSetThreshold(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/threshold", "请回复 /threshold 的参数值，例如 0.03")
+		b.requestCommandArgument(chatID, "/threshold", b.buildPromptWithCurrentValue("请发送 /threshold 的参数值，例如 0.03。\n\n作用：设置利率通知阈值，达到或超过该日利率时会发送通知。\n输入单位：百分比，直接输入 0.03 表示 0.03%。\n有效范围：大于 0。", b.currentValueText("/threshold")))
 		return
 	}
 	if len(parts) != 2 {
@@ -335,14 +472,14 @@ func (b *Bot) handleSetThreshold(chatID int64, text string) {
 		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
 		return
 	}
-	b.sendMessage(chatID, fmt.Sprintf("阈值已设定为: %.4f%%", threshold))
+	b.sendMessage(chatID, fmt.Sprintf("✅ 利率通知阈值已设定为: %.4f%%\n说明：达到或超过该日利率时会发送通知", threshold))
 }
 
 // handleSetReserve 处理设置保留金额指令
 func (b *Bot) handleSetReserve(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/reserve", "请回复 /reserve 的参数值，例如 100")
+		b.requestCommandArgument(chatID, "/reserve", b.buildPromptWithCurrentValue(fmt.Sprintf("请发送 /reserve 的参数值，例如 100。\n\n作用：设置不参与借贷的保留金额，这部分余额会被预留。\n输入单位：%s 金额，直接输入数值即可。\n有效范围：大于等于 0。", b.config.Currency), b.currentValueText("/reserve")))
 		return
 	}
 	if len(parts) != 2 {
@@ -362,14 +499,14 @@ func (b *Bot) handleSetReserve(chatID int64, text string) {
 		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
 		return
 	}
-	b.sendMessage(chatID, fmt.Sprintf("保留金额已设定为: %.2f", reserve))
+	b.sendMessage(chatID, fmt.Sprintf("✅ 保留金额已设定为: %.2f %s\n说明：这部分余额将不参与借贷", reserve, b.config.Currency))
 }
 
 // handleSetOrderLimit 处理设置订单限制指令
 func (b *Bot) handleSetOrderLimit(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/orderlimit", "请回复 /orderlimit 的参数值，例如 3")
+		b.requestCommandArgument(chatID, "/orderlimit", b.buildPromptWithCurrentValue("请发送 /orderlimit 的参数值，例如 3。\n\n作用：设置单次执行策略时，最多允许提交的订单数量。\n输入单位：整数，直接输入订单数即可。\n有效范围：大于等于 0。", b.currentValueText("/orderlimit")))
 		return
 	}
 	if len(parts) != 2 {
@@ -389,14 +526,14 @@ func (b *Bot) handleSetOrderLimit(chatID int64, text string) {
 		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
 		return
 	}
-	b.sendMessage(chatID, fmt.Sprintf("单次执行最大下单数量限制已设定为: %d", limit))
+	b.sendMessage(chatID, fmt.Sprintf("✅ 单次执行最大下单数量限制已设定为: %d\n说明：每轮策略执行最多提交 %d 笔订单", limit, limit))
 }
 
 // handleSetLoanDays 处理设置固定借贷天数指令
 func (b *Bot) handleSetLoanDays(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/loandays", "请回复 /loandays 的参数值，例如 30（或 0 表示自动）")
+		b.requestCommandArgument(chatID, "/loandays", b.buildPromptWithCurrentValue("请发送 /loandays 的参数值，例如 30。\n\n作用：设置固定借贷天数；设置后，新订单会优先使用该借贷天数。\n特殊值：输入 0 表示自动判断。\n输入单位：天数，直接输入整数即可。\n有效范围：0，或 2-120 的整数。", b.currentValueText("/loandays")))
 		return
 	}
 	if len(parts) != 2 {
@@ -422,18 +559,18 @@ func (b *Bot) handleSetLoanDays(chatID int64, text string) {
 		return
 	}
 	if days == 0 {
-		b.sendMessage(chatID, "固定借贷天数已设为: 自动判断")
+		b.sendMessage(chatID, "✅ 固定借贷天数已设为: 自动判断\n说明：后续订单将按策略自动决定借贷天数")
 		return
 	}
 
-	b.sendMessage(chatID, fmt.Sprintf("固定借贷天数已设定为: %d 天", days))
+	b.sendMessage(chatID, fmt.Sprintf("✅ 固定借贷天数已设定为: %d 天\n说明：后续订单将优先使用该借贷天数", days))
 }
 
 // handleSetMinDailyRate 处理设置最低日利率指令
 func (b *Bot) handleSetMinDailyRate(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/mindailylendrate", "请回复 /mindailylendrate 的参数值，例如 0.03 或 FRR")
+		b.requestCommandArgument(chatID, "/mindailylendrate", b.buildPromptWithCurrentValue("请发送 /mindailylendrate 的参数值，例如 0.03 或 FRR。\n\n作用：设置最低每日贷出利率，低于该利率时不会按普通固定利率挂单。\n输入单位：百分比，直接输入 0.03 表示 0.03%。\n特殊值：输入 FRR 表示改为使用 FRR 浮动利率模式。\n有效范围：数值模式下为大于 0 且不超过 7%。", b.currentValueText("/mindailylendrate")))
 		return
 	}
 	if len(parts) != 2 {
@@ -449,7 +586,7 @@ func (b *Bot) handleSetMinDailyRate(chatID int64, text string) {
 			b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
 			return
 		}
-		b.sendMessage(chatID, "最低每日贷出利率已设定为: FRR（将使用 FRR 模式挂单）")
+		b.sendMessage(chatID, "✅ 最低每日贷出利率已设定为: FRR\n说明：后续将使用 FRR 浮动利率模式挂单")
 		return
 	}
 
@@ -470,14 +607,14 @@ func (b *Bot) handleSetMinDailyRate(chatID int64, text string) {
 		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
 		return
 	}
-	b.sendMessage(chatID, fmt.Sprintf("最低每日贷出利率已设定为: %.4f%%", rate))
+	b.sendMessage(chatID, fmt.Sprintf("✅ 最低每日贷出利率已设定为: %.4f%%\n说明：低于该利率时不会按普通固定利率挂单", rate))
 }
 
 // handleSetMinLoan 处理设置最小贷出金额指令
 func (b *Bot) handleSetMinLoan(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/minloan", "请回复 /minloan 的参数值，例如 150")
+		b.requestCommandArgument(chatID, "/minloan", b.buildPromptWithCurrentValue(fmt.Sprintf("请发送 /minloan 的参数值，例如 150。\n\n作用：设置单笔订单的最小贷出金额。\n输入单位：%s 金额，直接输入数值即可。\n有效范围：大于 0，且不能大于当前最大贷出金额。", b.config.Currency), b.currentValueText("/minloan")))
 		return
 	}
 	if len(parts) != 2 {
@@ -503,14 +640,14 @@ func (b *Bot) handleSetMinLoan(chatID int64, text string) {
 		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
 		return
 	}
-	b.sendMessage(chatID, fmt.Sprintf("✅ 最小贷出金额已设定为: %.2f %s", amount, b.config.Currency))
+	b.sendMessage(chatID, fmt.Sprintf("✅ 最小贷出金额已设定为: %.2f %s\n说明：单笔订单金额不会低于该值", amount, b.config.Currency))
 }
 
 // handleSetMaxLoan 处理设置最大贷出金额指令
 func (b *Bot) handleSetMaxLoan(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/maxloan", "请回复 /maxloan 的参数值，例如 500（或 0 表示无限制）")
+		b.requestCommandArgument(chatID, "/maxloan", b.buildPromptWithCurrentValue(fmt.Sprintf("请发送 /maxloan 的参数值，例如 500。\n\n作用：设置单笔订单的最大贷出金额。\n特殊值：输入 0 表示不限制单笔最大金额。\n输入单位：%s 金额，直接输入数值即可。\n有效范围：大于等于 0；非 0 时不能小于当前最小贷出金额。", b.config.Currency), b.currentValueText("/maxloan")))
 		return
 	}
 	if len(parts) != 2 {
@@ -538,9 +675,9 @@ func (b *Bot) handleSetMaxLoan(chatID int64, text string) {
 	}
 
 	if amount == 0 {
-		b.sendMessage(chatID, "✅ 最大贷出金额已设定为: 无限制")
+		b.sendMessage(chatID, "✅ 最大贷出金额已设定为: 无限制\n说明：单笔订单金额将不再受最大金额约束")
 	} else {
-		b.sendMessage(chatID, fmt.Sprintf("✅ 最大贷出金额已设定为: %.2f %s", amount, b.config.Currency))
+		b.sendMessage(chatID, fmt.Sprintf("✅ 最大贷出金额已设定为: %.2f %s\n说明：单笔订单金额不会高于该值", amount, b.config.Currency))
 	}
 }
 
@@ -548,7 +685,7 @@ func (b *Bot) handleSetMaxLoan(chatID int64, text string) {
 func (b *Bot) handleSetHighHoldRate(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/highholdrate", "请回复 /highholdrate 的参数值，例如 0.05")
+		b.requestCommandArgument(chatID, "/highholdrate", b.buildPromptWithCurrentValue("请发送 /highholdrate 的参数值，例如 0.05。\n\n作用：设置高额持有策略使用的目标日利率。\n输入单位：百分比，直接输入 0.05 表示 0.05%。\n有效范围：大于 0，且不超过 7%。", b.currentValueText("/highholdrate")))
 		return
 	}
 	if len(parts) != 2 {
@@ -573,14 +710,14 @@ func (b *Bot) handleSetHighHoldRate(chatID int64, text string) {
 		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
 		return
 	}
-	b.sendMessage(chatID, fmt.Sprintf("高额持有策略的日利率已设定为: %.4f%%", rate))
+	b.sendMessage(chatID, fmt.Sprintf("✅ 高额持有策略日利率已设定为: %.4f%%\n说明：高额持有策略将按该目标日利率挂单", rate))
 }
 
 // handleSetHighHoldAmount 处理设置高额持有金额指令
 func (b *Bot) handleSetHighHoldAmount(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/highholdamount", "请回复 /highholdamount 的参数值，例如 1000（或 0 关闭）")
+		b.requestCommandArgument(chatID, "/highholdamount", b.buildPromptWithCurrentValue(fmt.Sprintf("请发送 /highholdamount 的参数值，例如 1000。\n\n作用：设置高额持有策略的触发金额，达到该金额后会启用高额持有逻辑。\n特殊值：输入 0 表示关闭高额持有策略。\n输入单位：%s 金额，直接输入数值即可。\n有效范围：大于等于 0。", b.config.Currency), b.currentValueText("/highholdamount")))
 		return
 	}
 	if len(parts) != 2 {
@@ -602,9 +739,9 @@ func (b *Bot) handleSetHighHoldAmount(chatID int64, text string) {
 	}
 
 	if amount == 0 {
-		b.sendMessage(chatID, "✅ 高额持有策略已关闭\n高额持有金额已设定为: 0.00")
+		b.sendMessage(chatID, fmt.Sprintf("✅ 高额持有策略已关闭\n高额持有金额已设定为: 0.00 %s", b.config.Currency))
 	} else {
-		b.sendMessage(chatID, fmt.Sprintf("✅ 高额持有策略已启用\n高额持有金额已设定为: %.2f %s", amount, b.config.Currency))
+		b.sendMessage(chatID, fmt.Sprintf("✅ 高额持有策略已启用\n高额持有金额已设定为: %.2f %s\n说明：达到该金额后会启用高额持有逻辑", amount, b.config.Currency))
 	}
 }
 
@@ -612,7 +749,7 @@ func (b *Bot) handleSetHighHoldAmount(chatID int64, text string) {
 func (b *Bot) handleSetHighHoldOrders(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/highholdorders", "请回复 /highholdorders 的参数值，例如 3")
+		b.requestCommandArgument(chatID, "/highholdorders", b.buildPromptWithCurrentValue("请发送 /highholdorders 的参数值，例如 3。\n\n作用：设置高额持有策略下的订单数量。\n输入单位：整数，直接输入订单数即可。\n有效范围：大于等于 1。", b.currentValueText("/highholdorders")))
 		return
 	}
 	if len(parts) != 2 {
@@ -632,14 +769,14 @@ func (b *Bot) handleSetHighHoldOrders(chatID int64, text string) {
 		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
 		return
 	}
-	b.sendMessage(chatID, fmt.Sprintf("高额持有订单数量已设定为: %d", orders))
+	b.sendMessage(chatID, fmt.Sprintf("✅ 高额持有订单数量已设定为: %d\n说明：高额持有策略将按该数量拆分订单", orders))
 }
 
 // handleSetRateRangeIncrease 处理设置利率范围增加百分比指令
 func (b *Bot) handleSetRateRangeIncrease(chatID int64, text string) {
 	parts := strings.Split(text, " ")
 	if len(parts) == 1 {
-		b.requestCommandArgument(chatID, "/raterangeincrease", "请回复 /raterangeincrease 的参数值，例如 10")
+		b.requestCommandArgument(chatID, "/raterangeincrease", b.buildPromptWithCurrentValue("请发送 /raterangeincrease 的参数值，例如 10。\n\n作用：控制分散挂单时的利率扩展幅度，数值越大，各档挂单利率间距越大。\n输入单位：百分比，直接输入 10 表示 10%，不需要再除以 100。\n有效范围：大于 0，且不超过 100。", b.currentValueText("/raterangeincrease")))
 		return
 	}
 	if len(parts) != 2 {
@@ -668,7 +805,7 @@ func (b *Bot) handleSetRateRangeIncrease(chatID int64, text string) {
 		b.sendMessage(chatID, fmt.Sprintf("参数更新失败: %v", err))
 		return
 	}
-	b.sendMessage(chatID, fmt.Sprintf("利率范围增加百分比已设定为: %.2f%% (%.4f)", percentage, decimalValue))
+	b.sendMessage(chatID, fmt.Sprintf("✅ 利率范围增加百分比已设定为: %.2f%%\n说明：分散挂单时，各档订单利率将按该百分比拉开", percentage))
 }
 
 // handleRestart 处理重启指令
@@ -775,24 +912,37 @@ func (b *Bot) handleCallbackQuery(query *tgbotapi.CallbackQuery) {
 		return
 	}
 
-	switch query.Data {
-	case "confirm:restart":
+	data := query.Data
+
+	switch {
+	case data == "confirm:restart":
 		_ = b.answerCallback(tgbotapi.NewCallbackWithAlert(query.ID, "已确认，开始执行重跑"))
 		if query.Message != nil {
 			b.handleConfirmedRestart(query.Message.Chat.ID)
 		}
-	case "confirm:canceloffers:tracked":
+	case data == "confirm:canceloffers:tracked":
 		_ = b.answerCallback(tgbotapi.NewCallbackWithAlert(query.ID, "已确认，开始取消程序追踪订单"))
 		if query.Message != nil {
 			b.executeConfirmedCancelOffers(query.Message.Chat.ID, false)
 		}
-	case "confirm:canceloffers:all":
+	case data == "confirm:canceloffers:all":
 		_ = b.answerCallback(tgbotapi.NewCallbackWithAlert(query.ID, "已确认，开始取消全部未成交订单"))
 		if query.Message != nil {
 			b.executeConfirmedCancelOffers(query.Message.Chat.ID, true)
 		}
-	case "cancel:restart", "cancel:canceloffers:tracked", "cancel:canceloffers:all":
+	case data == "cancel:restart" || data == "cancel:canceloffers:tracked" || data == "cancel:canceloffers:all":
 		_ = b.answerCallback(tgbotapi.NewCallbackWithAlert(query.ID, "操作已取消"))
+	case strings.HasPrefix(data, "cancel:pendingreply:"):
+		if query.Message != nil && query.Message.Chat != nil {
+			chatID := query.Message.Chat.ID
+			token := strings.TrimPrefix(data, "cancel:pendingreply:")
+			if reply, ok := b.getPendingReplyState(chatID); ok && reply.Token == token {
+				b.resolvePendingReply(chatID, reply, pendingReplyStatusCanceled)
+			}
+		}
+		_ = b.answerCallback(tgbotapi.NewCallbackWithAlert(query.ID, "设置已取消"))
+	case data == "noop:pendingreply":
+		_ = b.answerCallback(tgbotapi.NewCallback(query.ID, "当前设置状态已结束"))
 	default:
 		_ = b.answerCallback(tgbotapi.NewCallback(query.ID, "未知操作"))
 	}
